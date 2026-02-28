@@ -237,9 +237,8 @@
     .btn-icon { padding: 4px 8px; }
     .btn-icon i { font-size: 12px; }
 
-    /* ── CSV Export modal ────────────────────────────────────────── */
-    .csv-modal { width: 560px; max-height: 82vh; display: flex; flex-direction: column; }
-    .csv-field-list { flex: 1; overflow-y: auto; margin: 0 -8px; }
+    /* ── CSV Export (side panel) ─────────────────────────────────── */
+    .csv-field-list { flex: 1; overflow-y: auto; }
     .csv-field-row {
       border-bottom: 1px solid var(--border); padding: 8px 10px;
       display: flex; flex-direction: column; gap: 4px;
@@ -251,13 +250,12 @@
     .csv-value-chip {
       display: inline-flex; align-items: center; gap: 4px;
       padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border-mid);
-      font-size: 10px; color: var(--text-1); background: var(--bg-3); cursor: default;
+      font-size: 10px; color: var(--text-1); background: var(--bg-3); cursor: pointer;
       transition: background .12s;
     }
     .csv-value-chip:hover { background: rgba(10,132,255,.18); border-color: var(--accent); color: var(--text-0); }
+    .csv-value-chip.chip-selected { background: rgba(10,132,255,.28); border-color: var(--accent); color: var(--text-0); }
     .csv-value-chip .chip-count { color: var(--text-2); font-size: 9px; }
-    .csv-modal-footer { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-    .csv-modal-footer .spacer { flex: 1; }
 
     /* ── SVG Export modal ────────────────────────────────────────── */
     .svg-modal { width: 400px; }
@@ -341,12 +339,23 @@
 
     <!-- Right: results panel -->
     <aside class="panel panel-right">
-      <div class="panel-header">
+      <!-- Results view header -->
+      <div class="panel-header" id="resultsViewHeader">
         <span>Results</span>
         <div class="results-header-btns">
           <button class="btn btn-sm btn-icon" id="exportCsvBtn" title="Export CSV"><i class="fa-solid fa-file-csv"></i></button>
           <button class="btn btn-sm btn-icon" id="exportGpxBtn" title="Export GPX"><i class="fa-solid fa-file-export"></i></button>
           <button class="btn btn-sm btn-icon" id="exportSvgBtn" title="Export SVG"><i class="fa-regular fa-image"></i></button>
+        </div>
+      </div>
+      <!-- CSV view header (hidden by default) -->
+      <div class="panel-header" id="csvViewHeader" style="display:none;">
+        <span style="font-size:11px;"><i class="fa-solid fa-file-csv" style="margin-right:4px;"></i>CSV — Fields</span>
+        <div class="results-header-btns">
+          <button class="btn btn-sm" id="csvSelectAllBtn" aria-label="Select all CSV fields">All</button>
+          <button class="btn btn-sm" id="csvDeselectAllBtn" aria-label="Deselect all CSV fields">None</button>
+          <button class="btn btn-sm btn-primary" id="doExportCsvBtn" style="width:auto;padding:3px 8px;" title="Download CSV" aria-label="Download CSV"><i class="fa-solid fa-download"></i></button>
+          <button class="btn btn-sm btn-icon" id="closeCsvViewBtn" title="Back to Results" aria-label="Back to Results"><i class="fa-solid fa-xmark"></i></button>
         </div>
       </div>
       <div class="results-list" id="resultsList">
@@ -355,6 +364,7 @@
           <div>Generate a query to see results here.</div>
         </div>
       </div>
+      <div class="csv-field-list" id="csvFieldList" style="display:none;"></div>
     </aside>
 
   </div><!-- /layout -->
@@ -393,20 +403,6 @@
   </div>
 </div>
 
-<!-- CSV Export modal -->
-<div class="modal-overlay" id="csvExportOverlay">
-  <div class="modal csv-modal">
-    <div class="modal-title"><i class="fa-solid fa-file-csv" style="margin-right:6px;"></i>Export CSV — Select Fields</div>
-    <div class="csv-field-list" id="csvFieldList"></div>
-    <div class="csv-modal-footer">
-      <button class="btn btn-sm" id="csvSelectAllBtn">Select All</button>
-      <button class="btn btn-sm" id="csvDeselectAllBtn">Deselect All</button>
-      <span class="spacer"></span>
-      <button class="btn" id="cancelCsvBtn">Cancel</button>
-      <button class="btn btn-primary" id="doExportCsvBtn" style="width:auto;padding:6px 18px;"><i class="fa-solid fa-download"></i> Export</button>
-    </div>
-  </div>
-</div>
 
 <!-- SVG Export modal -->
 <div class="modal-overlay" id="svgExportOverlay">
@@ -542,14 +538,13 @@ function bindEvents() {
   document.getElementById('exportCsvBtn').addEventListener('click', openCsvExport);
   document.getElementById('exportSvgBtn').addEventListener('click', openSvgExport);
 
-  // CSV Export modal
-  document.getElementById('cancelCsvBtn').addEventListener('click', () => document.getElementById('csvExportOverlay').classList.remove('open'));
-  document.getElementById('csvExportOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) e.target.classList.remove('open'); });
+  // CSV Export panel (side panel)
+  document.getElementById('closeCsvViewBtn').addEventListener('click', closeCsvView);
   document.getElementById('csvSelectAllBtn').addEventListener('click', () => {
     document.querySelectorAll('#csvFieldList input[type="checkbox"]').forEach(cb => cb.checked = true);
   });
   document.getElementById('csvDeselectAllBtn').addEventListener('click', () => {
-    document.querySelectorAll('#csvFieldList input[type="checkbox"]').forEach(cb => cb.checked = false);
+    document.querySelectorAll('#csvFieldList input[type="checkbox"]').forEach(cb => { if (!cb.disabled) cb.checked = false; });
   });
   document.getElementById('doExportCsvBtn').addEventListener('click', doExportCsv);
 
@@ -1193,6 +1188,16 @@ function onBrushUp(e)    {
       if (hit) S.selectedIds.add(elId(el));
     });
   });
+  Object.values(S.shownSearches).forEach(shown => {
+    (shown.queries || []).forEach(q => {
+      (q.elements || []).forEach(el => {
+        let hit = false;
+        if (el.type === 'node') hit = bounds.contains([el.lat, el.lon]);
+        else if (el.type === 'way' && el.geometry) hit = el.geometry.some(p => bounds.contains([p.lat, p.lon]));
+        if (hit) S.selectedIds.add(elId(el));
+      });
+    });
+  });
 
   syncLayerStyles();
   renderResultsList();
@@ -1310,14 +1315,7 @@ function setVariantCount(idx, text) {
 
 /* ── GPX export ─────────────────────────────────────────────────── */
 function exportGPX() {
-  const all = [];
-  S.queries.forEach((q, qi) => {
-    (q.elements || []).forEach(el => {
-      const eid = elId(el);
-      if (!S.selectedIds.size || S.selectedIds.has(eid)) all.push({ el, qname: q.name });
-    });
-  });
-
+  const all = getAllExportElements();
   if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
 
   const now = new Date().toISOString();
@@ -1377,7 +1375,22 @@ function reapplyToBbox(idx) {
   runQuery(idx);
 }
 
-/* ── CSV export (modal) ─────────────────────────────────────────── */
+/* ── CSV export (side panel) ────────────────────────────────────── */
+function openCsvView() {
+  document.getElementById('resultsViewHeader').style.display = 'none';
+  document.getElementById('csvViewHeader').style.display = '';
+  document.getElementById('resultsList').style.display = 'none';
+  document.getElementById('csvFieldList').style.display = '';
+}
+
+function closeCsvView() {
+  document.getElementById('resultsViewHeader').style.display = '';
+  document.getElementById('csvViewHeader').style.display = 'none';
+  document.getElementById('resultsList').style.display = '';
+  document.getElementById('csvFieldList').style.display = 'none';
+  clearTagHighlight();
+}
+
 function openCsvExport() {
   const all = getAllExportElements();
   if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
@@ -1431,7 +1444,7 @@ function openCsvExport() {
     row.dataset.key = key;
 
     const chips = topValues.map(([val, cnt]) => {
-      const chip = `<span class="csv-value-chip" data-key="${esc(key)}" data-value="${esc(val)}" title="Hover to highlight on map">${esc(val)} <span class="chip-count">${cnt}</span></span>`;
+      const chip = `<span class="csv-value-chip" data-key="${esc(key)}" data-value="${esc(val)}" title="Click to select matching items">${esc(val)} <span class="chip-count">${cnt}</span></span>`;
       return chip;
     }).join('');
 
@@ -1447,13 +1460,14 @@ function openCsvExport() {
     container.appendChild(row);
   });
 
-  // Hover to highlight
+  // Hover to highlight, click to select elements with matching tag value
   container.querySelectorAll('.csv-value-chip').forEach(chip => {
     chip.addEventListener('mouseenter', () => highlightByTagValue(chip.dataset.key, chip.dataset.value));
     chip.addEventListener('mouseleave', clearTagHighlight);
+    chip.addEventListener('click', () => selectByTagValue(chip.dataset.key, chip.dataset.value, chip));
   });
 
-  document.getElementById('csvExportOverlay').classList.add('open');
+  openCsvView();
 }
 
 function doExportCsv() {
@@ -1478,7 +1492,7 @@ function doExportCsv() {
 
   const csv = [header, ...rows].join('\n');
   downloadBlob(csv, `overpass-ai-${Date.now()}.csv`, 'text/csv;charset=utf-8;');
-  document.getElementById('csvExportOverlay').classList.remove('open');
+  closeCsvView();
 }
 
 // Keep the old function name as an alias for backwards-compatibility (share-loaded queries, etc.)
@@ -1517,6 +1531,30 @@ function highlightByTagValue(key, value) {
 function clearTagHighlight() {
   _tagHighlightState.forEach(({ layer, origStyle }) => { try { layer.setStyle(origStyle); } catch(_) {} });
   _tagHighlightState = [];
+}
+
+/* Select all elements that have a given tag key=value and update the chips UI */
+function selectByTagValue(key, value, clickedChip) {
+  const allEls = getAllExportElements();
+  const matchIds = new Set(allEls.filter(({ el }) => (el.tags || {})[key] === value).map(({ el }) => elId(el)));
+
+  // Toggle: if all matching elements are already selected, deselect them; otherwise select them
+  let allSelected = matchIds.size > 0;
+  for (const id of matchIds) { if (!S.selectedIds.has(id)) { allSelected = false; break; } }
+
+  if (allSelected) {
+    matchIds.forEach(id => S.selectedIds.delete(id));
+  } else {
+    matchIds.forEach(id => S.selectedIds.add(id));
+  }
+
+  // Update all chips with the same key+value (there should only be one, but keep in sync)
+  document.querySelectorAll(`.csv-value-chip[data-key="${CSS.escape(key)}"][data-value="${CSS.escape(value)}"]`).forEach(chip => {
+    chip.classList.toggle('chip-selected', !allSelected);
+  });
+
+  syncLayerStyles();
+  updateStatusResults();
 }
 
 /* ── SVG export ─────────────────────────────────────────── */
