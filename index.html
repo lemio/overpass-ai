@@ -260,9 +260,13 @@
     .csv-modal-footer .spacer { flex: 1; }
 
     /* ── SVG Export modal ────────────────────────────────────────── */
-    .svg-modal { width: 380px; }
+    .svg-modal { width: 400px; }
     .radio-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; font-size: 12px; }
     .check-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; }
+    .svg-query-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+    .svg-query-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .svg-query-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
+    .svg-query-select { font-size: 11px; padding: 2px 4px; background: var(--bg-2); color: var(--text-1); border: 1px solid var(--border); border-radius: 3px; }
   </style>
 </head>
 <body>
@@ -409,9 +413,13 @@
   <div class="modal svg-modal">
     <div class="modal-title"><i class="fa-regular fa-image" style="margin-right:6px;"></i>Export SVG</div>
     <div class="form-group">
-      <label class="label">Element Style</label>
+      <label class="label">Default Style</label>
       <label class="radio-row"><input type="radio" name="svgStyle" value="areas" checked /> Polygons (areas as shapes, lines as lines)</label>
       <label class="radio-row"><input type="radio" name="svgStyle" value="dots" /> Dots (force all elements as points)</label>
+    </div>
+    <div class="form-group" id="svgQueryStylesGroup" style="display:none;">
+      <label class="label">Per-Query Style</label>
+      <div id="svgQueryStyles"></div>
     </div>
     <div class="form-group">
       <label class="check-row"><input type="checkbox" id="svgTilesCheck" checked /> Include map background tiles (OpenStreetMap)</label>
@@ -1511,17 +1519,49 @@ function clearTagHighlight() {
   _tagHighlightState = [];
 }
 
-/* ── SVG export ─────────────────────────────────────────────────── */
+/* ── SVG export ─────────────────────────────────────────── */
 function openSvgExport() {
   const all = getAllExportElements();
   if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
+
+  // Build per-query style rows
+  const container = document.getElementById('svgQueryStyles');
+  const group     = document.getElementById('svgQueryStylesGroup');
+  container.innerHTML = '';
+
+  const queryRows = [];
+  S.queries.forEach((q, qi) => {
+    if (q.elements?.length) queryRows.push({ name: q.name, color: COLORS[qi % COLORS.length], key: `active-${qi}` });
+  });
+  Object.entries(S.shownSearches).forEach(([id, shown]) => {
+    (shown.queries || []).forEach((q, qi) => {
+      if (q.elements?.length) queryRows.push({ name: q.name, color: _colorForShownQuery(id, qi), key: `shown-${id}-${qi}` });
+    });
+  });
+
+  if (queryRows.length > 1) {
+    queryRows.forEach(({ name, color, key }) => {
+      const row = document.createElement('div');
+      row.className = 'svg-query-row';
+      row.innerHTML = `<span class="svg-query-swatch" style="background:${color}"></span><span class="svg-query-name" title="${esc(name)}">${esc(name)}</span><select class="svg-query-select" data-key="${esc(key)}"><option value="auto">Auto</option><option value="polygons">Polygons</option><option value="dots">Dots</option></select>`;
+      container.appendChild(row);
+    });
+    group.style.display = '';
+  } else {
+    group.style.display = 'none';
+  }
+
   document.getElementById('svgExportOverlay').classList.add('open');
 }
 
 async function doExportSvg() {
   document.getElementById('svgExportOverlay').classList.remove('open');
 
-  const forceDots   = document.querySelector('input[name="svgStyle"]:checked')?.value === 'dots';
+  const globalForceDots = document.querySelector('input[name="svgStyle"]:checked')?.value === 'dots';
+  const queryStyleMap   = {};
+  document.querySelectorAll('#svgQueryStyles .svg-query-select').forEach(sel => {
+    queryStyleMap[sel.dataset.key] = sel.value;
+  });
   const includeTiles = document.getElementById('svgTilesCheck').checked;
 
   const b     = S.map.getBounds();
@@ -1634,8 +1674,10 @@ async function doExportSvg() {
   svg.insertBefore(defs, svg.firstChild);
 
   // Draw queries
-  function drawQueryToSvg(q, color) {
+  function drawQueryToSvg(q, color, key) {
     if (!q.elements?.length) return;
+    const override  = queryStyleMap[key];
+    const forceDots = override === 'dots' ? true : override === 'polygons' ? false : globalForceDots;
     const group = document.createElementNS(svgNS, 'g');
     group.setAttribute('id', sanitizeId(q.name));
     group.setAttribute('clip-path', 'url(#artboard-clip)');
@@ -1710,10 +1752,10 @@ async function doExportSvg() {
     svg.appendChild(group);
   }
 
-  S.queries.forEach((q, qi) => drawQueryToSvg(q, COLORS[qi % COLORS.length]));
+  S.queries.forEach((q, qi) => drawQueryToSvg(q, COLORS[qi % COLORS.length], `active-${qi}`));
 
   Object.entries(S.shownSearches).forEach(([id, shown]) => {
-    (shown.queries || []).forEach((q, qi) => drawQueryToSvg(q, _colorForShownQuery(id, qi)));
+    (shown.queries || []).forEach((q, qi) => drawQueryToSvg(q, _colorForShownQuery(id, qi), `shown-${id}-${qi}`));
   });
 
   const serializer = new XMLSerializer();
