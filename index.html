@@ -224,6 +224,8 @@
     .saved-item-btn { font-size: 10px; padding: 1px 6px; border-radius: 2px; border: 1px solid var(--border-mid); color: var(--text-1); background: var(--bg-3); cursor: pointer; line-height: 1.4; flex-shrink: 0; }
     .saved-item-btn:hover { background: var(--bg-hover); }
     .saved-item-btn.danger { border-color: var(--danger); color: var(--danger); }
+    .saved-item-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .saved-item-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .saved-item-body { padding: 6px 10px; font-size: 11px; color: var(--text-1); line-height: 1.5; border-top: 1px solid var(--border); display: none; }
     .saved-item.open .saved-item-body { display: block; }
     .saved-empty { font-size: 11px; color: var(--text-2); text-align: center; padding: 8px 0; }
@@ -465,7 +467,8 @@ const S = {
   queries: [],      // [{name, description, overpassQL, tags, elements, layerGroup, elementLayers, areaFallbacks, visible}]
   selectedIds: new Set(),
   brush: { active: false, start: null, overlayEl: null, rectLayer: null },
-  savedSearches: [], // [{id, question, queries, savedAt, hidden}]
+  savedSearches: [], // [{id, question, queries:[{..., cachedElements}], savedAt, hidden}]
+  shownSearches: {}, // id → { layerGroups: L.LayerGroup[], areaFallbacks: [] }
   currentQuestion: '',
 };
 
@@ -963,6 +966,26 @@ function _applyAreaDots() {
       } catch(_) {}
     });
   });
+  // Also apply area-dot logic for shown saved searches
+  Object.values(S.shownSearches).forEach(shown => {
+    (shown.areaFallbacks || []).forEach(({ poly, fallback, eid, color }) => {
+      try {
+        const bounds = poly.getBounds();
+        if (!bounds.isValid()) return;
+        const sw = S.map.latLngToContainerPoint(bounds.getSouthWest());
+        const ne = S.map.latLngToContainerPoint(bounds.getNorthEast());
+        const pxSize = Math.max(Math.abs(ne.x - sw.x), Math.abs(ne.y - sw.y));
+        const tooSmall = pxSize < AREA_MIN_PX;
+        if (tooSmall) {
+          poly.setStyle({ opacity: 0, fillOpacity: 0 });
+          fallback.setStyle({ opacity: 1, fillOpacity: 0.85, fillColor: color, color: '#fff', weight: STYLE.NODE_WEIGHT, radius: STYLE.NODE_RADIUS });
+        } else {
+          poly.setStyle(polyStyle(color));
+          fallback.setStyle({ opacity: 0, fillOpacity: 0 });
+        }
+      } catch(_) {}
+    });
+  });
 }
 
 function isAreaEl(tags = {}) {
@@ -993,6 +1016,11 @@ function hlLayer(layer, type, on, color) {
 
 function clearAllLayers() {
   S.queries.forEach(q => { if (q.layerGroup) S.map.removeLayer(q.layerGroup); });
+  Object.values(S.shownSearches).forEach(shown => {
+    shown.layerGroups.forEach(lg => { if (lg) S.map.removeLayer(lg); });
+  });
+  S.shownSearches = {};
+  renderSavedSearches();
 }
 
 /* ── Results list ───────────────────────────────────────────────── */
@@ -1761,7 +1789,7 @@ function saveSearch(question, queries, variantIdx) {
   const entry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     question: question || '',
-    queries: queries.map(q => ({ name: q.name, description: q.description, overpassQL: q.overpassQL, tags: q.tags })),
+    queries: queries.map(q => ({ name: q.name, description: q.description, overpassQL: q.overpassQL, tags: q.tags, cachedElements: S.queries.find(sq => sq.overpassQL === q.overpassQL)?.elements || [] })),
     activeVariant: variantIdx,
     savedAt: new Date().toISOString(),
     hidden: false,
@@ -1786,6 +1814,99 @@ function persistSavedSearches() {
   localStorage.setItem('saved_searches', JSON.stringify(S.savedSearches));
 }
 
+function _colorForShownSearch(id) {
+  // Assign a COLORS slot after the active queries, based on insertion order
+  const ids = Object.keys(S.shownSearches);
+  const pos = ids.indexOf(id);
+  const offset = pos < 0 ? ids.length : pos;
+  return COLORS[(S.queries.length + offset) % COLORS.length];
+}
+
+function _colorForShownQuery(id, queryIndex) {
+  const ids = Object.keys(S.shownSearches);
+  const pos = ids.indexOf(id);
+  const offset = pos < 0 ? ids.length : pos;
+  return COLORS[(S.queries.length + offset + queryIndex) % COLORS.length];
+}
+
+async function showSavedSearchOnMap(id) {
+  const entry = S.savedSearches.find(s => s.id === id);
+  if (!entry || S.shownSearches[id]) return;
+
+  const layerGroups = [];
+  const areaFallbacks = [];
+
+  const b = S.map.getBounds();
+  const bbox = `${b.getSouth().toFixed(6)},${b.getWest().toFixed(6)},${b.getNorth().toFixed(6)},${b.getEast().toFixed(6)}`;
+
+  // Register early so _colorForShownSearch can compute correct offsets for subsequent calls
+  S.shownSearches[id] = { layerGroups, areaFallbacks };
+  renderSavedSearches();
+
+  const queriesToRun = entry.queries;
+  for (let qi = 0; qi < queriesToRun.length; qi++) {
+    const q = queriesToRun[qi];
+    const qColor = _colorForShownQuery(id, qi);
+    try {
+      let elements;
+      if (q.cachedElements && q.cachedElements.length > 0) {
+        elements = q.cachedElements;
+      } else {
+        const oql = q.overpassQL.replace(/\{\{bbox\}\}/g, bbox);
+        const data = await fetchOverpass(oql);
+        elements = (data.elements || []).filter(el =>
+          (el.type === 'node' && el.lat != null) ||
+          (el.type === 'way'  && el.geometry)    ||
+          (el.type === 'relation' && el.members)
+        );
+      }
+      const lg = L.layerGroup().addTo(S.map);
+      const MAX_RENDER = 1000;
+      elements.slice(0, MAX_RENDER).forEach(el => {
+        const eid  = elId(el);
+        const name = elName(el);
+        let layer  = null;
+        if (el.type === 'node') {
+          layer = L.circleMarker([el.lat, el.lon], nodeStyle(qColor));
+        } else if (el.type === 'way' && el.geometry) {
+          const pts = el.geometry.map(p => [p.lat, p.lon]);
+          const closed = pts.length > 2 && pts[0][0] === pts[pts.length-1][0] && pts[0][1] === pts[pts.length-1][1];
+          if (closed && isAreaEl(el.tags)) {
+            layer = L.polygon(pts, polyStyle(qColor));
+            const center = layer.getBounds().getCenter();
+            const fallback = L.circleMarker([center.lat, center.lng], { ...nodeStyle(qColor), opacity: 0, fillOpacity: 0 });
+            fallback.bindPopup(buildPopup(el, name, qColor));
+            lg.addLayer(fallback);
+            areaFallbacks.push({ poly: layer, fallback, eid, color: qColor });
+          } else {
+            layer = L.polyline(pts, lineStyle(qColor));
+          }
+        } else if (el.type === 'relation' && el.members) {
+          const ways = el.members.filter(m => m.type === 'way' && m.geometry);
+          if (ways.length) layer = L.polyline(ways.map(w => w.geometry.map(p => [p.lat, p.lon])), lineStyle(qColor));
+        }
+        if (layer) {
+          layer.bindPopup(buildPopup(el, name, qColor));
+          lg.addLayer(layer);
+        }
+      });
+      layerGroups.push(lg);
+    } catch (err) {
+      console.warn('showSavedSearchOnMap query error:', err);
+      layerGroups.push(null);
+    }
+  }
+  updateAreaDots();
+}
+
+function hideSavedSearchFromMap(id) {
+  const shown = S.shownSearches[id];
+  if (!shown) return;
+  shown.layerGroups.forEach(lg => { if (lg) S.map.removeLayer(lg); });
+  delete S.shownSearches[id];
+  renderSavedSearches();
+}
+
 function loadSavedSearch(id) {
   const entry = S.savedSearches.find(s => s.id === id);
   if (!entry) return;
@@ -1793,9 +1914,25 @@ function loadSavedSearch(id) {
   document.getElementById('questionInput').value = entry.question;
   document.getElementById('examplesSection').style.display = 'none';
   clearAllLayers();
-  S.queries = entry.queries.map(q => ({ ...q, elements: [], layerGroup: null, elementLayers: new Map(), areaFallbacks: [], visible: true }));
+  S.queries = entry.queries.map(q => ({ ...q, elements: q.cachedElements || [], layerGroup: null, elementLayers: new Map(), areaFallbacks: [], visible: true }));
   renderQueryOutput('', entry.queries);
-  setTimeout(() => runQuery(entry.activeVariant ?? 0), 100);
+  const activeIdx = entry.activeVariant ?? 0;
+  const cached = S.queries[activeIdx]?.elements;
+  if (cached && cached.length > 0) {
+    setTimeout(() => {
+      setActiveVariant(activeIdx);
+      renderOnMap(activeIdx, cached);
+      renderResultsList();
+      const countLabel = cached.length > 1000
+        ? `${cached.length} results (map shows first 1000)`
+        : `${cached.length} result${cached.length !== 1 ? 's' : ''}`;
+      setVariantCount(activeIdx, countLabel);
+      updateStatusResults();
+      if (cached.length > 0) fitResults();
+    }, 100);
+  } else {
+    setTimeout(() => runQuery(activeIdx), 100);
+  }
 }
 
 function renderSavedSearches() {
@@ -1815,14 +1952,18 @@ function renderSavedSearches() {
 
   S.savedSearches.forEach(entry => {
     const date = new Date(entry.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const isShown = !!S.shownSearches[entry.id];
+    const shownColor = isShown ? _colorForShownSearch(entry.id) : null;
+    // Validate color is a safe CSS hex value (comes from COLORS palette)
+    const safeColor = shownColor && /^#[0-9a-fA-F]{3,6}$/.test(shownColor) ? shownColor : '#888';
     const item = document.createElement('div');
     item.className = 'saved-item';
-    if (entry.hidden) item.style.opacity = '0.45';
     item.innerHTML = `
       <div class="saved-item-header">
+        ${isShown ? `<span class="saved-item-dot" style="background:${safeColor};"></span>` : ''}
         <span class="saved-item-name" title="${esc(entry.question)}">${esc(entry.question || entry.queries[0]?.name || 'Saved search')}</span>
         <span class="saved-item-date">${esc(date)}</span>
-        <button class="saved-item-btn" data-action="toggle" data-id="${esc(entry.id)}">${entry.hidden ? 'show' : 'hide'}</button>
+        <button class="saved-item-btn${isShown ? ' active' : ''}" data-action="toggle" data-id="${esc(entry.id)}">${isShown ? 'hide' : 'show'}</button>
         <button class="saved-item-btn" data-action="load" data-id="${esc(entry.id)}">load</button>
         <button class="saved-item-btn danger" data-action="delete" data-id="${esc(entry.id)}">✕</button>
       </div>`;
@@ -1833,7 +1974,10 @@ function renderSavedSearches() {
         const id = btn.dataset.id;
         if (btn.dataset.action === 'load')   loadSavedSearch(id);
         if (btn.dataset.action === 'delete') deleteSavedSearch(id);
-        if (btn.dataset.action === 'toggle') toggleSavedSearchHidden(id);
+        if (btn.dataset.action === 'toggle') {
+          if (S.shownSearches[id]) hideSavedSearchFromMap(id);
+          else showSavedSearchOnMap(id);
+        }
       });
     });
     container.appendChild(item);
