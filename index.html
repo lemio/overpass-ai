@@ -6,6 +6,7 @@
   <title>Overpass AI</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -229,6 +230,37 @@
 
     /* ── Export CSV button ───────────────────────────────────────── */
     .results-header-btns { display: flex; gap: 4px; }
+
+    /* ── Icon buttons ────────────────────────────────────────────── */
+    .btn-icon { padding: 4px 8px; }
+    .btn-icon i { font-size: 12px; }
+
+    /* ── CSV Export modal ────────────────────────────────────────── */
+    .csv-modal { width: 560px; max-height: 82vh; display: flex; flex-direction: column; }
+    .csv-field-list { flex: 1; overflow-y: auto; margin: 0 -8px; }
+    .csv-field-row {
+      border-bottom: 1px solid var(--border); padding: 8px 10px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .csv-field-header { display: flex; align-items: center; gap: 8px; }
+    .csv-field-label { font-size: 12px; font-weight: 600; flex: 1; font-family: 'SF Mono','Consolas',monospace; }
+    .csv-field-count { font-size: 10px; color: var(--text-2); }
+    .csv-value-chips { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 22px; }
+    .csv-value-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border-mid);
+      font-size: 10px; color: var(--text-1); background: var(--bg-3); cursor: default;
+      transition: background .12s;
+    }
+    .csv-value-chip:hover { background: rgba(10,132,255,.18); border-color: var(--accent); color: var(--text-0); }
+    .csv-value-chip .chip-count { color: var(--text-2); font-size: 9px; }
+    .csv-modal-footer { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .csv-modal-footer .spacer { flex: 1; }
+
+    /* ── SVG Export modal ────────────────────────────────────────── */
+    .svg-modal { width: 380px; }
+    .radio-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; font-size: 12px; }
+    .check-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -238,8 +270,8 @@
   <div class="topbar">
     <span class="topbar-title">Overpass AI</span>
     <span class="topbar-spacer"></span>
-    <button class="btn btn-sm" id="shareBtn" title="Copy share link to clipboard">Share</button>
-    <button class="btn btn-sm" id="settingsBtn">Settings</button>
+    <button class="btn btn-sm btn-icon" id="shareBtn" title="Copy share link to clipboard"><i class="fa-solid fa-share-nodes"></i> Share</button>
+    <button class="btn btn-sm btn-icon" id="settingsBtn" title="Settings"><i class="fa-solid fa-gear"></i></button>
   </div>
 
   <!-- Main layout -->
@@ -295,9 +327,9 @@
     <main class="map-container">
       <div id="map"></div>
       <div class="map-toolbar">
-        <button class="btn btn-sm" id="brushBtn">Brush Select</button>
-        <button class="btn btn-sm" id="clearSelBtn">Clear Selection</button>
-        <button class="btn btn-sm" id="fitBtn">Fit Results</button>
+        <button class="btn btn-sm btn-icon" id="brushBtn" title="Brush Select"><i class="fa-solid fa-pen"></i> Brush Select</button>
+        <button class="btn btn-sm btn-icon" id="clearSelBtn" title="Clear Selection"><i class="fa-solid fa-xmark"></i> Clear</button>
+        <button class="btn btn-sm btn-icon" id="fitBtn" title="Fit Results to Map"><i class="fa-solid fa-expand"></i> Fit</button>
       </div>
     </main>
 
@@ -306,8 +338,9 @@
       <div class="panel-header">
         <span>Results</span>
         <div class="results-header-btns">
-          <button class="btn btn-sm" id="exportCsvBtn">Export CSV</button>
-          <button class="btn btn-sm" id="exportGpxBtn">Export GPX</button>
+          <button class="btn btn-sm btn-icon" id="exportCsvBtn" title="Export CSV"><i class="fa-solid fa-file-csv"></i></button>
+          <button class="btn btn-sm btn-icon" id="exportGpxBtn" title="Export GPX"><i class="fa-solid fa-file-export"></i></button>
+          <button class="btn btn-sm btn-icon" id="exportSvgBtn" title="Export SVG"><i class="fa-regular fa-image"></i></button>
         </div>
       </div>
       <div class="results-list" id="resultsList">
@@ -350,6 +383,40 @@
     <div class="modal-actions">
       <button class="btn" id="cancelSettingsBtn">Cancel</button>
       <button class="btn btn-primary" id="saveSettingsBtn" style="width:auto;padding:6px 18px;">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- CSV Export modal -->
+<div class="modal-overlay" id="csvExportOverlay">
+  <div class="modal csv-modal">
+    <div class="modal-title"><i class="fa-solid fa-file-csv" style="margin-right:6px;"></i>Export CSV — Select Fields</div>
+    <div class="csv-field-list" id="csvFieldList"></div>
+    <div class="csv-modal-footer">
+      <button class="btn btn-sm" id="csvSelectAllBtn">Select All</button>
+      <button class="btn btn-sm" id="csvDeselectAllBtn">Deselect All</button>
+      <span class="spacer"></span>
+      <button class="btn" id="cancelCsvBtn">Cancel</button>
+      <button class="btn btn-primary" id="doExportCsvBtn" style="width:auto;padding:6px 18px;"><i class="fa-solid fa-download"></i> Export</button>
+    </div>
+  </div>
+</div>
+
+<!-- SVG Export modal -->
+<div class="modal-overlay" id="svgExportOverlay">
+  <div class="modal svg-modal">
+    <div class="modal-title"><i class="fa-regular fa-image" style="margin-right:6px;"></i>Export SVG</div>
+    <div class="form-group">
+      <label class="label">Element Style</label>
+      <label class="radio-row"><input type="radio" name="svgStyle" value="areas" checked /> Polygons (areas as shapes, lines as lines)</label>
+      <label class="radio-row"><input type="radio" name="svgStyle" value="dots" /> Dots (force all elements as points)</label>
+    </div>
+    <div class="form-group">
+      <label class="check-row"><input type="checkbox" id="svgTilesCheck" checked /> Include map background tiles (OpenStreetMap)</label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="cancelSvgBtn">Cancel</button>
+      <button class="btn btn-primary" id="doExportSvgBtn" style="width:auto;padding:6px 18px;"><i class="fa-solid fa-download"></i> Export SVG</button>
     </div>
   </div>
 </div>
@@ -461,7 +528,24 @@ function bindEvents() {
 
   // Export
   document.getElementById('exportGpxBtn').addEventListener('click', exportGPX);
-  document.getElementById('exportCsvBtn').addEventListener('click', exportCSV);
+  document.getElementById('exportCsvBtn').addEventListener('click', openCsvExport);
+  document.getElementById('exportSvgBtn').addEventListener('click', openSvgExport);
+
+  // CSV Export modal
+  document.getElementById('cancelCsvBtn').addEventListener('click', () => document.getElementById('csvExportOverlay').classList.remove('open'));
+  document.getElementById('csvExportOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) e.target.classList.remove('open'); });
+  document.getElementById('csvSelectAllBtn').addEventListener('click', () => {
+    document.querySelectorAll('#csvFieldList input[type="checkbox"]').forEach(cb => cb.checked = true);
+  });
+  document.getElementById('csvDeselectAllBtn').addEventListener('click', () => {
+    document.querySelectorAll('#csvFieldList input[type="checkbox"]').forEach(cb => cb.checked = false);
+  });
+  document.getElementById('doExportCsvBtn').addEventListener('click', doExportCsv);
+
+  // SVG Export modal
+  document.getElementById('cancelSvgBtn').addEventListener('click', () => document.getElementById('svgExportOverlay').classList.remove('open'));
+  document.getElementById('svgExportOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) e.target.classList.remove('open'); });
+  document.getElementById('doExportSvgBtn').addEventListener('click', doExportSvg);
 
   // Share
   document.getElementById('shareBtn').addEventListener('click', shareQuery);
@@ -1097,8 +1181,9 @@ function renderQueryOutput(explanation, queries) {
       <div class="qv-header">
         <div class="qv-dot" style="background:${color};"></div>
         <span class="qv-name">${esc(q.name)}</span>
-        <span class="qv-vis" data-idx="${idx}" title="Toggle visibility">hide</span>
-        <span class="qv-save" data-idx="${idx}" title="Save this search to local storage" style="font-size:11px;padding:1px 5px;border-radius:2px;border:1px solid var(--border-mid);color:var(--text-1);background:var(--bg-3);cursor:pointer;line-height:1.4;">save</span>
+        <span class="qv-vis" data-idx="${idx}" title="Toggle visibility"><i class="fa-regular fa-eye"></i></span>
+        <span class="qv-reapply" data-idx="${idx}" title="Re-apply to current bounding box (removes area filters)" style="font-size:11px;padding:1px 5px;border-radius:2px;border:1px solid var(--border-mid);color:var(--text-1);background:var(--bg-3);cursor:pointer;line-height:1.4;"><i class="fa-solid fa-crosshairs"></i></span>
+        <span class="qv-save" data-idx="${idx}" title="Save this search to local storage" style="font-size:11px;padding:1px 5px;border-radius:2px;border:1px solid var(--border-mid);color:var(--text-1);background:var(--bg-3);cursor:pointer;line-height:1.4;"><i class="fa-regular fa-bookmark"></i></span>
         <span class="qv-count" data-idx="${idx}">-</span>
       </div>
       <div class="qv-body">
@@ -1109,8 +1194,9 @@ function renderQueryOutput(explanation, queries) {
 
     // Click header → activate + execute if needed
     div.querySelector('.qv-header').addEventListener('click', async e => {
-      if (e.target.classList.contains('qv-vis')) return; // handled separately
-      if (e.target.classList.contains('qv-save')) return; // handled separately
+      if (e.target.closest('.qv-vis')) return; // handled separately
+      if (e.target.closest('.qv-save')) return; // handled separately
+      if (e.target.closest('.qv-reapply')) return; // handled separately
       document.querySelectorAll('.query-variant').forEach(el => el.classList.remove('active'));
       div.classList.add('active');
       if (!S.queries[idx]?.elements?.length) await runQuery(idx);
@@ -1120,8 +1206,15 @@ function renderQueryOutput(explanation, queries) {
     div.querySelector('.qv-save').addEventListener('click', e => {
       e.stopPropagation();
       saveSearch(S.currentQuestion, queries, idx);
-      e.target.textContent = 'saved!';
-      setTimeout(() => { e.target.textContent = 'save'; }, 1500);
+      const icon = e.currentTarget.querySelector('i');
+      if (icon) { icon.className = 'fa-solid fa-bookmark'; }
+      setTimeout(() => { if (icon) icon.className = 'fa-regular fa-bookmark'; }, 1500);
+    });
+
+    // Reapply to current bounding box
+    div.querySelector('.qv-reapply').addEventListener('click', e => {
+      e.stopPropagation();
+      reapplyToBbox(idx);
     });
 
     // Visibility toggle
@@ -1130,7 +1223,8 @@ function renderQueryOutput(explanation, queries) {
       const q2 = S.queries[idx];
       if (!q2) return;
       q2.visible = !q2.visible;
-      e.target.textContent = q2.visible ? 'hide' : 'show';
+      const icon = e.currentTarget.querySelector('i');
+      if (icon) icon.className = q2.visible ? 'fa-regular fa-eye' : 'fa-regular fa-eye-slash';
       if (q2.layerGroup) {
         if (q2.visible) S.map.addLayer(q2.layerGroup);
         else S.map.removeLayer(q2.layerGroup);
@@ -1215,43 +1309,409 @@ function exportGPX() {
   URL.revokeObjectURL(url);
 }
 
-/* ── CSV export ─────────────────────────────────────────────────── */
-function exportCSV() {
-  const all = [];
-  S.queries.forEach((q, qi) => {
-    (q.elements || []).forEach(el => {
-      const eid = elId(el);
-      if (!S.selectedIds.size || S.selectedIds.has(eid)) all.push({ el, qname: q.name });
+/* ── Re-apply to current bounding box ──────────────────────────── */
+function reapplyToBbox(idx) {
+  const q = S.queries[idx];
+  if (!q) return;
+  const b = S.map.getBounds();
+  const bbox = `${b.getSouth().toFixed(6)},${b.getWest().toFixed(6)},${b.getNorth().toFixed(6)},${b.getEast().toFixed(6)}`;
+
+  let oql = q.overpassQL;
+
+  // Remove area definition lines (e.g. area["name"="..."]->.a;)
+  oql = oql.replace(/\barea\s*(?:\[[^\]]*\]\s*)*->\s*\.\w+\s*;\s*/g, '');
+
+  // Remove area filter references inside geo filters (e.g. (area.a))
+  oql = oql.replace(/\s*\(\s*area\s*\.\s*\w+\s*\)/g, '');
+
+  // Update or insert bbox in the global settings line
+  if (/\[bbox:[^\]]*\]/.test(oql)) {
+    oql = oql.replace(/\[bbox:[^\]]*\]/, `[bbox:${bbox}]`);
+  } else {
+    // Add bbox before the closing semicolon of the settings line
+    oql = oql.replace(/(\[out:[^\]]*\](?:\[[^\]]*\])*)\s*;/, `$1[bbox:${bbox}];`);
+  }
+
+  S.queries[idx].overpassQL = oql;
+
+  // Update the displayed code block
+  const pre = document.querySelector(`.qv-code[data-idx="${idx}"]`);
+  if (pre) pre.textContent = oql;
+
+  runQuery(idx);
+}
+
+/* ── CSV export (modal) ─────────────────────────────────────────── */
+function openCsvExport() {
+  const all = getAllExportElements();
+  if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
+
+  // Collect tag keys and value frequencies
+  const tagFreq = {};  // key → Map(value → count)
+  const SYSTEM_FIELDS = ['id', 'type', 'name', 'lat', 'lon', 'query'];
+
+  all.forEach(({ el }) => {
+    Object.entries(el.tags || {}).forEach(([k, v]) => {
+      if (!tagFreq[k]) tagFreq[k] = new Map();
+      tagFreq[k].set(v, (tagFreq[k].get(v) || 0) + 1);
     });
   });
 
-  if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
+  const sortedKeys = Object.keys(tagFreq).sort();
+  const container  = document.getElementById('csvFieldList');
+  container.innerHTML = '';
 
-  // Collect all tag keys across all elements (union)
-  const tagKeys = new Set();
-  all.forEach(({ el }) => Object.keys(el.tags || {}).forEach(k => tagKeys.add(k)));
-  const sortedKeys = [...tagKeys].sort();
+  // Render system field rows (always included, locked)
+  const sysHeader = document.createElement('div');
+  sysHeader.style.cssText = 'padding:6px 10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-2);';
+  sysHeader.textContent = 'System Fields (always included)';
+  container.appendChild(sysHeader);
+
+  SYSTEM_FIELDS.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'csv-field-row';
+    row.innerHTML = `<div class="csv-field-header"><input type="checkbox" checked disabled style="opacity:.5;"> <span class="csv-field-label">${esc(f)}</span></div>`;
+    container.appendChild(row);
+  });
+
+  if (sortedKeys.length) {
+    const tagHeader = document.createElement('div');
+    tagHeader.style.cssText = 'padding:6px 10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-2);border-top:1px solid var(--border);margin-top:4px;';
+    tagHeader.textContent = 'OSM Tag Fields';
+    container.appendChild(tagHeader);
+  }
+
+  sortedKeys.forEach(key => {
+    const freq = tagFreq[key];
+    const total = [...freq.values()].reduce((a, b) => a + b, 0);
+
+    // Top 8 values by frequency
+    const topValues = [...freq.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8);
+
+    const row = document.createElement('div');
+    row.className = 'csv-field-row';
+    row.dataset.key = key;
+
+    const chips = topValues.map(([val, cnt]) => {
+      const chip = `<span class="csv-value-chip" data-key="${esc(key)}" data-value="${esc(val)}" title="Hover to highlight on map">${esc(val)} <span class="chip-count">${cnt}</span></span>`;
+      return chip;
+    }).join('');
+
+    const moreNote = freq.size > 8 ? `<span style="font-size:10px;color:var(--text-2);padding:1px 4px;">+${freq.size - 8} more</span>` : '';
+
+    row.innerHTML = `
+      <div class="csv-field-header">
+        <input type="checkbox" checked data-field-key="${esc(key)}">
+        <span class="csv-field-label">${esc(key)}</span>
+        <span class="csv-field-count">${total} values</span>
+      </div>
+      <div class="csv-value-chips">${chips}${moreNote}</div>`;
+    container.appendChild(row);
+  });
+
+  // Hover to highlight
+  container.querySelectorAll('.csv-value-chip').forEach(chip => {
+    chip.addEventListener('mouseenter', () => highlightByTagValue(chip.dataset.key, chip.dataset.value));
+    chip.addEventListener('mouseleave', clearTagHighlight);
+  });
+
+  document.getElementById('csvExportOverlay').classList.add('open');
+}
+
+function doExportCsv() {
+  const all = getAllExportElements();
+  if (!all.length) return;
+
+  const checkedKeys = [...document.querySelectorAll('#csvFieldList input[type="checkbox"]:not(:disabled):checked')]
+    .map(cb => cb.dataset.fieldKey);
 
   const escCsv = v => {
     const s = String(v ?? '');
     return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
   };
 
-  const header = ['id', 'type', 'name', 'lat', 'lon', 'query', ...sortedKeys].map(escCsv).join(',');
-
+  const header = ['id', 'type', 'name', 'lat', 'lon', 'query', ...checkedKeys].map(escCsv).join(',');
   const rows = all.map(({ el, qname }) => {
     const tags = el.tags || {};
-    const lat = el.type === 'node' ? el.lat : (el.geometry ? el.geometry[0]?.lat : '') ?? '';
-    const lon = el.type === 'node' ? el.lon : (el.geometry ? el.geometry[0]?.lon : '') ?? '';
-    return [el.id, el.type, elName(el), lat, lon, qname, ...sortedKeys.map(k => tags[k] ?? '')].map(escCsv).join(',');
+    const lat = el.type === 'node' ? el.lat : (el.geometry?.[0]?.lat ?? '');
+    const lon = el.type === 'node' ? el.lon : (el.geometry?.[0]?.lon ?? '');
+    return [el.id, el.type, elName(el), lat, lon, qname, ...checkedKeys.map(k => tags[k] ?? '')].map(escCsv).join(',');
   });
 
   const csv = [header, ...rows].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  downloadBlob(csv, `overpass-ai-${Date.now()}.csv`, 'text/csv;charset=utf-8;');
+  document.getElementById('csvExportOverlay').classList.remove('open');
+}
+
+// Keep the old function name as an alias for backwards-compatibility (share-loaded queries, etc.)
+function exportCSV() { openCsvExport(); }
+
+/* ── Tag-value map highlight ────────────────────────────────────── */
+let _tagHighlightState = []; // [{layer, origStyle}]
+function highlightByTagValue(key, value) {
+  clearTagHighlight();
+  S.queries.forEach((q, qi) => {
+    const color = COLORS[qi % COLORS.length];
+    (q.elements || []).forEach(el => {
+      const v = (el.tags || {})[key];
+      const eid = elId(el);
+      const layer = q.elementLayers?.get(eid);
+      if (!layer) return;
+      const matches = v === value;
+      try {
+        if (el.type === 'node') {
+          const cur = { fillColor: layer.options.fillColor, radius: layer.options.radius, opacity: layer.options.opacity, fillOpacity: layer.options.fillOpacity };
+          _tagHighlightState.push({ layer, origStyle: cur });
+          layer.setStyle(matches
+            ? { fillColor: SEL_COLOR, radius: STYLE.NODE_RADIUS_SEL, opacity: 1, fillOpacity: 1 }
+            : { fillColor: color, radius: STYLE.NODE_RADIUS, opacity: 0.25, fillOpacity: 0.25 });
+        } else {
+          const cur = { color: layer.options.color, weight: layer.options.weight, opacity: layer.options.opacity };
+          _tagHighlightState.push({ layer, origStyle: cur });
+          layer.setStyle(matches
+            ? { color: SEL_COLOR, weight: STYLE.LINE_WEIGHT_SEL, opacity: 1 }
+            : { color, weight: STYLE.LINE_WEIGHT, opacity: 0.2 });
+        }
+      } catch(_) {}
+    });
+  });
+}
+function clearTagHighlight() {
+  _tagHighlightState.forEach(({ layer, origStyle }) => { try { layer.setStyle(origStyle); } catch(_) {} });
+  _tagHighlightState = [];
+}
+
+/* ── SVG export ─────────────────────────────────────────────────── */
+function openSvgExport() {
+  const all = getAllExportElements();
+  if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
+  document.getElementById('svgExportOverlay').classList.add('open');
+}
+
+async function doExportSvg() {
+  document.getElementById('svgExportOverlay').classList.remove('open');
+
+  const forceDots   = document.querySelector('input[name="svgStyle"]:checked')?.value === 'dots';
+  const includeTiles = document.getElementById('svgTilesCheck').checked;
+
+  const b     = S.map.getBounds();
+  const zoom  = S.map.getZoom();
+  const W     = document.getElementById('map').clientWidth  || 800;
+  const H     = document.getElementById('map').clientHeight || 600;
+
+  // Mercator helpers (Web Mercator / EPSG:3857 pixel coords at given zoom)
+  const TILE_SIZE = 256;
+  function latToY(lat) {
+    const sin = Math.sin(lat * Math.PI / 180);
+    return (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * TILE_SIZE * Math.pow(2, zoom);
+  }
+  function lonToX(lon) {
+    return ((lon + 180) / 360) * TILE_SIZE * Math.pow(2, zoom);
+  }
+
+  const originX = lonToX(b.getWest());
+  const originY = latToY(b.getNorth());
+  const scale   = W / (lonToX(b.getEast()) - originX);
+
+  function geoToSvg(lat, lon) {
+    return { x: (lonToX(lon) - originX) * scale, y: (latToY(lat) - originY) * scale };
+  }
+
+  // Collect tile URLs for current view
+  async function getTileImages() {
+    const tileZ    = Math.round(zoom);
+    const tileSize = TILE_SIZE;
+    const n        = Math.pow(2, tileZ);
+
+    function latToTileY(lat) { return Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * n); }
+    function lonToTileX(lon) { return Math.floor((lon + 180) / 360 * n); }
+
+    const x0 = lonToTileX(b.getWest());
+    const x1 = lonToTileX(b.getEast());
+    const y0 = latToTileY(b.getNorth());
+    const y1 = latToTileY(b.getSouth());
+
+    const tiles = [];
+    for (let tx = x0; tx <= x1; tx++) {
+      for (let ty = y0; ty <= y1; ty++) {
+        const url  = `https://tile.openstreetmap.org/${tileZ}/${tx}/${ty}.png`;
+        const px   = (tx * tileSize - originX) * scale;
+        const py   = (ty * tileSize - originY) * scale;
+        const tw   = tileSize * scale;
+        tiles.push({ url, px, py, tw });
+      }
+    }
+
+    // Fetch tiles as data URLs for embedding
+    const results = await Promise.all(tiles.map(async t => {
+      try {
+        const resp = await fetch(t.url);
+        const blob = await resp.blob();
+        const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+        return { ...t, dataUrl };
+      } catch (_) {
+        return { ...t, dataUrl: t.url };
+      }
+    }));
+    return results;
+  }
+
+  setStatus('Generating SVG…');
+
+  let tileImgs = [];
+  if (includeTiles) {
+    try { tileImgs = await getTileImages(); } catch(_) {}
+  }
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg   = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('xmlns', svgNS);
+  svg.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  svg.setAttribute('width',  W);
+  svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  // Background tiles
+  if (tileImgs.length) {
+    const bgGroup = document.createElementNS(svgNS, 'g');
+    bgGroup.setAttribute('id', 'map-tiles');
+    tileImgs.forEach(t => {
+      const img = document.createElementNS(svgNS, 'image');
+      img.setAttribute('href', t.dataUrl);
+      img.setAttribute('x',      t.px.toFixed(2));
+      img.setAttribute('y',      t.py.toFixed(2));
+      img.setAttribute('width',  t.tw.toFixed(2));
+      img.setAttribute('height', t.tw.toFixed(2));
+      img.setAttribute('preserveAspectRatio', 'none');
+      bgGroup.appendChild(img);
+    });
+    svg.appendChild(bgGroup);
+  } else if (!includeTiles) {
+    // Dark background rect
+    const bg = document.createElementNS(svgNS, 'rect');
+    bg.setAttribute('width', W); bg.setAttribute('height', H); bg.setAttribute('fill', '#141414');
+    svg.appendChild(bg);
+  }
+
+  // Clip to artboard
+  const defs  = document.createElementNS(svgNS, 'defs');
+  const clip  = document.createElementNS(svgNS, 'clipPath');
+  clip.setAttribute('id', 'artboard-clip');
+  const clipRect = document.createElementNS(svgNS, 'rect');
+  clipRect.setAttribute('width', W); clipRect.setAttribute('height', H);
+  clip.appendChild(clipRect);
+  defs.appendChild(clip);
+  svg.insertBefore(defs, svg.firstChild);
+
+  // Draw queries
+  S.queries.forEach((q, qi) => {
+    if (!q.elements?.length) return;
+    const color = COLORS[qi % COLORS.length];
+    const group = document.createElementNS(svgNS, 'g');
+    group.setAttribute('id', sanitizeId(q.name));
+    group.setAttribute('clip-path', 'url(#artboard-clip)');
+
+    (q.elements || []).forEach(el => {
+      const name = elName(el);
+      const sid  = sanitizeId(name);
+
+      if (el.type === 'node' || forceDots) {
+        // Point
+        const lat = el.type === 'node' ? el.lat : (el.geometry?.[0]?.lat);
+        const lon = el.type === 'node' ? el.lon : (el.geometry?.[0]?.lon);
+        if (lat == null || lon == null) return;
+        const { x, y } = geoToSvg(lat, lon);
+        if (x < -20 || y < -20 || x > W + 20 || y > H + 20) return;
+        const circle = document.createElementNS(svgNS, 'circle');
+        circle.setAttribute('id', sid);
+        circle.setAttribute('cx', x.toFixed(2));
+        circle.setAttribute('cy', y.toFixed(2));
+        circle.setAttribute('r',  '5');
+        circle.setAttribute('fill', color);
+        circle.setAttribute('fill-opacity', '0.85');
+        circle.setAttribute('stroke', '#fff');
+        circle.setAttribute('stroke-width', '1');
+        const title = document.createElementNS(svgNS, 'title');
+        title.textContent = name;
+        circle.appendChild(title);
+        group.appendChild(circle);
+      } else if (el.type === 'way' && el.geometry) {
+        const pts    = el.geometry.map(p => geoToSvg(p.lat, p.lon));
+        const pStr   = pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+        const first  = pts[0], last = pts[pts.length - 1];
+        const closed = pts.length > 2 && Math.abs(first.x - last.x) < 0.5 && Math.abs(first.y - last.y) < 0.5;
+        let shape;
+        if (closed && isAreaEl(el.tags)) {
+          shape = document.createElementNS(svgNS, 'polygon');
+          shape.setAttribute('points', pStr);
+          shape.setAttribute('fill', color);
+          shape.setAttribute('fill-opacity', '0.2');
+          shape.setAttribute('stroke', color);
+          shape.setAttribute('stroke-width', '1.5');
+        } else {
+          shape = document.createElementNS(svgNS, 'polyline');
+          shape.setAttribute('points', pStr);
+          shape.setAttribute('fill', 'none');
+          shape.setAttribute('stroke', color);
+          shape.setAttribute('stroke-width', '2');
+        }
+        shape.setAttribute('id', sid);
+        const title = document.createElementNS(svgNS, 'title');
+        title.textContent = name;
+        shape.appendChild(title);
+        group.appendChild(shape);
+      } else if (el.type === 'relation' && el.members) {
+        const rg = document.createElementNS(svgNS, 'g');
+        rg.setAttribute('id', sid);
+        el.members.filter(m => m.type === 'way' && m.geometry).forEach((m, mi) => {
+          const pts  = m.geometry.map(p => geoToSvg(p.lat, p.lon));
+          const pStr = pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+          const line = document.createElementNS(svgNS, 'polyline');
+          line.setAttribute('points', pStr);
+          line.setAttribute('fill', 'none');
+          line.setAttribute('stroke', color);
+          line.setAttribute('stroke-width', '2');
+          if (mi === 0) { const t = document.createElementNS(svgNS, 'title'); t.textContent = name; line.appendChild(t); }
+          rg.appendChild(line);
+        });
+        group.appendChild(rg);
+      }
+    });
+
+    svg.appendChild(group);
+  });
+
+  const serializer = new XMLSerializer();
+  const svgStr     = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(svg);
+  downloadBlob(svgStr, `overpass-ai-${Date.now()}.svg`, 'image/svg+xml;charset=utf-8;');
+  setStatus('SVG exported');
+}
+
+function sanitizeId(s) {
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, '_').replace(/^([^a-zA-Z_])/, '_$1') || 'element';
+}
+
+/* ── Download helper ─────────────────────────────────────────────── */
+function downloadBlob(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
-  a.href = url; a.download = `overpass-ai-${Date.now()}.csv`; a.click();
+  a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
+}
+
+/* ── Common export element collector ────────────────────────────── */
+function getAllExportElements() {
+  const all = [];
+  S.queries.forEach((q, qi) => {
+    (q.elements || []).forEach(el => {
+      const eid = elId(el);
+      if (!S.selectedIds.size || S.selectedIds.has(eid)) all.push({ el, qname: q.name, qi });
+    });
+  });
+  return all;
 }
 
 /* ── Share URL ──────────────────────────────────────────────────── */
