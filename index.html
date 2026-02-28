@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Overpass AI</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-0: #141414;
+      --bg-1: #1e1e1e;
+      --bg-2: #272727;
+      --bg-3: #303030;
+      --bg-hover: #383838;
+      --border: #383838;
+      --border-mid: #444;
+      --text-0: #e8e8e8;
+      --text-1: #aaa;
+      --text-2: #666;
+      --accent: #0a84ff;
+      --accent-h: #3a9dff;
+      --danger: #c0392b;
+      --radius: 3px;
+    }
+
+    html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 13px; background: var(--bg-0); color: var(--text-0); overflow: hidden; }
+
+    /* ── Layout ────────────────────────────────────────────────── */
+    .app { display: flex; flex-direction: column; height: 100vh; }
+
+    .topbar {
+      height: 40px; background: var(--bg-1); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0;
+    }
+    .topbar-title { font-size: 14px; font-weight: 600; letter-spacing: 0.3px; }
+    .topbar-spacer { flex: 1; }
+
+    .layout { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Panels ─────────────────────────────────────────────────── */
+    .panel { background: var(--bg-1); display: flex; flex-direction: column; overflow: hidden; }
+    .panel-left  { width: 330px; flex-shrink: 0; border-right: 1px solid var(--border); }
+    .panel-right { width: 290px; flex-shrink: 0; border-left: 1px solid var(--border); }
+
+    .panel-header {
+      padding: 8px 14px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--text-1); flex-shrink: 0;
+    }
+
+    .panel-body { flex: 1; overflow-y: auto; padding: 14px; }
+
+    /* ── Typography helpers ─────────────────────────────────────── */
+    .label {
+      display: block; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-1); margin-bottom: 5px;
+    }
+    .help-text { font-size: 11px; color: var(--text-2); margin-top: 5px; line-height: 1.5; }
+
+    /* ── Form elements ──────────────────────────────────────────── */
+    .form-group { margin-bottom: 14px; }
+
+    textarea, input[type="text"], input[type="password"], select {
+      width: 100%; background: var(--bg-3); border: 1px solid var(--border-mid);
+      color: var(--text-0); border-radius: var(--radius); padding: 7px 10px;
+      font-family: inherit; font-size: 13px; outline: none; transition: border-color .15s;
+    }
+    textarea { resize: vertical; min-height: 90px; }
+    textarea:focus, input:focus, select:focus { border-color: var(--accent); }
+
+    .example-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+    .example-btn {
+      text-align: left; background: var(--bg-2); border: 1px solid var(--border);
+      color: var(--text-1); border-radius: var(--radius); padding: 5px 8px; font-size: 11px;
+      cursor: pointer; font-family: inherit; transition: background .1s, color .1s;
+    }
+    .example-btn:hover { background: var(--bg-hover); color: var(--text-0); }
+
+    /* ── Buttons ────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      padding: 5px 12px; border: 1px solid var(--border-mid); border-radius: var(--radius);
+      font-family: inherit; font-size: 12px; cursor: pointer; background: var(--bg-3);
+      color: var(--text-0); transition: background .15s; outline: none;
+    }
+    .btn:hover { background: var(--bg-hover); }
+    .btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-sm { padding: 4px 10px; font-size: 11px; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; padding: 8px; font-size: 13px; }
+    .btn-primary:hover { background: var(--accent-h); border-color: var(--accent-h); }
+    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ── Separator ──────────────────────────────────────────────── */
+    .sep { height: 1px; background: var(--border); margin: 14px 0; }
+
+    /* ── Loading / Error ────────────────────────────────────────── */
+    .loading { display: flex; align-items: center; padding: 16px 0; color: var(--text-1); font-size: 12px; }
+    .spinner { width: 14px; height: 14px; border: 2px solid var(--border-mid); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; margin-right: 8px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-box { padding: 10px; background: rgba(192,57,43,.12); border: 1px solid rgba(192,57,43,.35); border-radius: var(--radius); font-size: 12px; color: #e74c3c; line-height: 1.5; }
+
+    /* ── Query output area ──────────────────────────────────────── */
+    .explanation-box { background: var(--bg-2); border-radius: var(--radius); padding: 10px; font-size: 12px; line-height: 1.6; color: var(--text-1); margin-bottom: 12px; }
+
+    /* ── Query variants ─────────────────────────────────────────── */
+    .query-variant {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      margin-bottom: 8px; overflow: hidden; cursor: default;
+      transition: border-color .15s;
+    }
+    .query-variant:hover { border-color: var(--border-mid); }
+    .query-variant.active { border-color: var(--accent); }
+
+    .qv-header {
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      background: var(--bg-2); cursor: pointer; user-select: none;
+    }
+    .qv-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    .qv-name { flex: 1; font-size: 12px; font-weight: 600; }
+    .qv-count { font-size: 11px; color: var(--text-2); }
+    .qv-vis { font-size: 11px; padding: 1px 5px; border-radius: 2px; border: 1px solid var(--border-mid); color: var(--text-1); background: var(--bg-3); cursor: pointer; line-height: 1.4; }
+    .qv-vis:hover { background: var(--bg-hover); }
+
+    .qv-body { padding: 8px 10px; font-size: 12px; color: var(--text-1); line-height: 1.55; border-top: 1px solid var(--border); display: none; }
+    .query-variant.active .qv-body { display: block; }
+
+    .qv-code-toggle { background: none; border: none; color: var(--text-2); font-size: 10px; cursor: pointer; text-decoration: underline; margin-top: 6px; padding: 0; font-family: inherit; }
+    .qv-code-toggle:hover { color: var(--text-1); }
+
+    .qv-code {
+      display: none; margin-top: 6px; padding: 8px; background: var(--bg-0);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      font-size: 10.5px; font-family: 'SF Mono', 'Consolas', monospace; color: #8ab4f8;
+      white-space: pre; overflow-x: auto; max-height: 180px; overflow-y: auto;
+    }
+
+    /* ── Wiki references ────────────────────────────────────────── */
+    .wiki-ref { padding: 8px; background: var(--bg-2); border-radius: var(--radius); margin-bottom: 6px; border-left: 2px solid var(--accent); }
+    .wiki-tag { font-size: 11px; font-weight: 700; font-family: 'SF Mono', 'Consolas', monospace; margin-bottom: 3px; }
+    .wiki-tag a { color: var(--accent); text-decoration: none; }
+    .wiki-tag a:hover { text-decoration: underline; }
+    .wiki-desc { font-size: 11px; color: var(--text-1); line-height: 1.45; }
+
+    /* ── Map ────────────────────────────────────────────────────── */
+    .map-container { flex: 1; position: relative; }
+    #map { width: 100%; height: 100%; }
+
+    .map-toolbar {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      z-index: 2000; display: flex; gap: 6px;
+    }
+    .map-toolbar .btn { background: rgba(30,30,30,.95); }
+
+    /* Leaflet dark overrides */
+    .leaflet-control-zoom a { background: var(--bg-1) !important; color: var(--text-0) !important; border-color: var(--border) !important; }
+    .leaflet-control-attribution { background: rgba(20,20,20,.8) !important; color: var(--text-2) !important; }
+    .leaflet-control-attribution a { color: var(--text-1) !important; }
+    .leaflet-popup-content-wrapper { background: var(--bg-1) !important; color: var(--text-0) !important; border: 1px solid var(--border-mid) !important; box-shadow: 0 3px 12px rgba(0,0,0,.6) !important; border-radius: var(--radius) !important; }
+    .leaflet-popup-tip { background: var(--bg-1) !important; }
+    .leaflet-popup-content { font-size: 12px; line-height: 1.5; }
+
+    /* ── Results panel ──────────────────────────────────────────── */
+    .results-list { flex: 1; overflow-y: auto; }
+
+    .result-item {
+      display: flex; align-items: stretch; gap: 0; padding: 0;
+      border-bottom: 1px solid var(--border); cursor: pointer; transition: background .1s;
+    }
+    .result-item:hover { background: var(--bg-2); }
+    .result-item.selected { background: rgba(10,132,255,.12); }
+
+    .result-bar { width: 3px; flex-shrink: 0; }
+    .result-inner { flex: 1; padding: 7px 10px; min-width: 0; }
+    .result-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .result-meta { font-size: 10px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
+
+    .results-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 20px; color: var(--text-2); font-size: 12px; text-align: center; }
+    .results-empty-title { font-size: 13px; font-weight: 600; color: var(--text-1); margin-bottom: 6px; }
+
+    /* ── Status bar ─────────────────────────────────────────────── */
+    .statusbar {
+      height: 22px; background: var(--bg-1); border-top: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 12px; gap: 14px;
+      font-size: 11px; color: var(--text-2); flex-shrink: 0;
+    }
+    .statusbar-spacer { flex: 1; }
+
+    /* ── Modal ──────────────────────────────────────────────────── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,.65);
+      z-index: 9999; align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal { background: var(--bg-1); border: 1px solid var(--border-mid); border-radius: 4px; padding: 24px; width: 400px; }
+    .modal-title { font-size: 14px; font-weight: 700; margin-bottom: 18px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+    /* ── Scrollbar ──────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+    /* ── Empty state for results ────────────────────────────────── */
+    .results-limit-note { padding: 8px 12px; font-size: 11px; color: var(--text-2); text-align: center; border-top: 1px solid var(--border); }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <span class="topbar-title">Overpass AI</span>
+    <span class="topbar-spacer"></span>
+    <button class="btn btn-sm" id="settingsBtn">Settings</button>
+  </div>
+
+  <!-- Main layout -->
+  <div class="layout">
+
+    <!-- Left: query panel -->
+    <aside class="panel panel-left">
+      <div class="panel-header"><span>Query</span></div>
+      <div class="panel-body">
+
+        <div class="form-group">
+          <label class="label" for="questionInput">Geographic Question</label>
+          <textarea id="questionInput" placeholder="e.g. What are all the chocolate stores in the Netherlands?&#10;&#10;Ctrl+Enter to generate"></textarea>
+        </div>
+
+        <div class="label">Examples</div>
+        <div class="example-list" id="exampleList"></div>
+
+        <button class="btn btn-primary" id="generateBtn">Generate Query</button>
+
+        <div id="loadingState" style="display:none;">
+          <div class="loading"><div class="spinner"></div><span id="loadingText">Generating query...</span></div>
+        </div>
+
+        <div id="errorState" style="display:none; margin-top:12px;" class="error-box">
+          <span id="errorText"></span>
+        </div>
+
+        <div id="queryOutput" style="display:none; margin-top:4px;">
+          <div class="sep"></div>
+          <div class="label" style="margin-bottom:6px;">Explanation</div>
+          <div class="explanation-box" id="explanationBox"></div>
+          <div class="label" style="margin-bottom:6px;">Query Variants</div>
+          <div id="queryVariants"></div>
+          <div id="wikiSection" style="display:none; margin-top:14px;">
+            <div class="label" style="margin-bottom:6px;">OSM Tag References</div>
+            <div id="wikiRefsList"></div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- Center: map -->
+    <main class="map-container">
+      <div id="map"></div>
+      <div class="map-toolbar">
+        <button class="btn btn-sm" id="brushBtn">Brush Select</button>
+        <button class="btn btn-sm" id="clearSelBtn">Clear Selection</button>
+        <button class="btn btn-sm" id="fitBtn">Fit Results</button>
+      </div>
+    </main>
+
+    <!-- Right: results panel -->
+    <aside class="panel panel-right">
+      <div class="panel-header">
+        <span>Results</span>
+        <button class="btn btn-sm" id="exportGpxBtn">Export GPX</button>
+      </div>
+      <div class="results-list" id="resultsList">
+        <div class="results-empty" id="resultsEmpty">
+          <div class="results-empty-title">No Results</div>
+          <div>Generate a query to see results here.</div>
+        </div>
+      </div>
+    </aside>
+
+  </div><!-- /layout -->
+
+  <!-- Status bar -->
+  <div class="statusbar">
+    <span id="statusText">Ready</span>
+    <span class="statusbar-spacer"></span>
+    <span id="statusResults"></span>
+    <span id="statusBounds"></span>
+  </div>
+
+</div><!-- /app -->
+
+<!-- Settings modal -->
+<div class="modal-overlay" id="settingsOverlay">
+  <div class="modal">
+    <div class="modal-title">Settings</div>
+    <div class="form-group">
+      <label class="label" for="apiKeyInput">OpenAI API Key</label>
+      <input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off" />
+      <div class="help-text">Stored in your browser's localStorage. Never sent to any server other than api.openai.com.</div>
+    </div>
+    <div class="form-group">
+      <label class="label" for="modelSelect">Model</label>
+      <select id="modelSelect">
+        <option value="gpt-4o">GPT-4o (recommended)</option>
+        <option value="gpt-4-turbo">GPT-4 Turbo</option>
+        <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="cancelSettingsBtn">Cancel</button>
+      <button class="btn btn-primary" id="saveSettingsBtn" style="width:auto;padding:6px 18px;">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ======================================================================
+   Overpass AI — main application script
+   ====================================================================== */
+
+// D3 schemeCategory10 colours (hardcoded to avoid full D3 dependency)
+const COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+
+// Layer style constants
+const STYLE = {
+  NODE_RADIUS:      6,
+  NODE_RADIUS_SEL:  8,
+  NODE_WEIGHT:      1.5,
+  NODE_WEIGHT_SEL:  2.5,
+  NODE_WEIGHT_HL:   2.5,
+  LINE_WEIGHT:      3,
+  LINE_WEIGHT_SEL:  4,
+  LINE_WEIGHT_HL:   4.5,
+};
+
+const EXAMPLES = [
+  'Streets where cars are allowed 50 km/h and are less than 1 km from an elementary school with pedestrian crossings',
+  'Streets with shared transport of bikes and cars where the maximum speed is 50 km/h or more',
+  'All chocolate stores in the Netherlands',
+  'Railway stations that do not have an OV-fiets within 1 km',
+];
+
+/* ── State ──────────────────────────────────────────────────────── */
+const S = {
+  apiKey: '',
+  model: 'gpt-4o',
+  map: null,
+  queries: [],      // [{name, description, overpassQL, tags, elements, layerGroup, elementLayers, visible}]
+  selectedIds: new Set(),
+  brush: { active: false, start: null, overlayEl: null, rectLayer: null },
+};
+
+/* ── Init ───────────────────────────────────────────────────────── */
+function init() {
+  S.apiKey = localStorage.getItem('openai_api_key') || '';
+  S.model  = localStorage.getItem('openai_model')   || 'gpt-4o';
+  buildExamples();
+  bindEvents();
+  try {
+    initMap();
+    updateStatusBounds();
+  } catch (e) {
+    console.error('Map init failed:', e);
+    setStatus('Map unavailable — check network');
+  }
+}
+
+function initMap() {
+  S.map = L.map('map', { center: [52.3676, 4.9041], zoom: 13 });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+  }).addTo(S.map);
+  S.map.on('moveend zoomend', updateStatusBounds);
+}
+
+function buildExamples() {
+  const list = document.getElementById('exampleList');
+  EXAMPLES.forEach(ex => {
+    const btn = document.createElement('button');
+    btn.className = 'example-btn';
+    btn.textContent = ex;
+    btn.addEventListener('click', () => {
+      document.getElementById('questionInput').value = ex;
+    });
+    list.appendChild(btn);
+  });
+}
+
+function bindEvents() {
+  // Settings
+  document.getElementById('settingsBtn').addEventListener('click', openSettings);
+  document.getElementById('cancelSettingsBtn').addEventListener('click', closeSettings);
+  document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
+  document.getElementById('settingsOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeSettings(); });
+
+  // Query
+  document.getElementById('generateBtn').addEventListener('click', handleGenerate);
+  document.getElementById('questionInput').addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'Enter') handleGenerate(); });
+
+  // Map toolbar
+  document.getElementById('brushBtn').addEventListener('click', toggleBrush);
+  document.getElementById('clearSelBtn').addEventListener('click', clearSelection);
+  document.getElementById('fitBtn').addEventListener('click', fitResults);
+
+  // Export
+  document.getElementById('exportGpxBtn').addEventListener('click', exportGPX);
+}
+
+/* ── Settings ───────────────────────────────────────────────────── */
+function openSettings() {
+  document.getElementById('apiKeyInput').value = S.apiKey;
+  document.getElementById('modelSelect').value = S.model;
+  document.getElementById('settingsOverlay').classList.add('open');
+}
+function closeSettings() { document.getElementById('settingsOverlay').classList.remove('open'); }
+function saveSettings() {
+  S.apiKey = document.getElementById('apiKeyInput').value.trim();
+  S.model  = document.getElementById('modelSelect').value;
+  localStorage.setItem('openai_api_key', S.apiKey);
+  localStorage.setItem('openai_model',   S.model);
+  closeSettings();
+}
+
+/* ── Status bar ─────────────────────────────────────────────────── */
+function setStatus(msg) { document.getElementById('statusText').textContent = msg; }
+function updateStatusBounds() {
+  if (!S.map) return;
+  const b = S.map.getBounds();
+  document.getElementById('statusBounds').textContent =
+    `${b.getSouth().toFixed(4)}, ${b.getWest().toFixed(4)} — ${b.getNorth().toFixed(4)}, ${b.getEast().toFixed(4)}`;
+}
+function updateStatusResults() {
+  const total = S.queries.reduce((n, q) => n + (q.elements ? q.elements.length : 0), 0);
+  const sel   = S.selectedIds.size;
+  document.getElementById('statusResults').textContent =
+    total ? `${total} result${total !== 1 ? 's' : ''}${sel ? `, ${sel} selected` : ''}` : '';
+}
+
+/* ── Generate ───────────────────────────────────────────────────── */
+async function handleGenerate() {
+  const question = document.getElementById('questionInput').value.trim();
+  if (!question) return;
+  if (!S.apiKey) { showError('Please set your OpenAI API key in Settings.'); return; }
+
+  // Reset
+  clearAllLayers();
+  S.queries = [];
+  S.selectedIds.clear();
+  hideError();
+  document.getElementById('queryOutput').style.display = 'none';
+  showLoading('Generating query...');
+
+  try {
+    const result = await callOpenAI(question);
+    hideLoading();
+    S.queries = (result.queries || []).map(q => ({
+      ...q, elements: [], layerGroup: null, elementLayers: new Map(), visible: true,
+    }));
+    renderQueryOutput(result.explanation || '', result.queries || []);
+    if (S.queries.length) await runQuery(0);
+  } catch (err) {
+    hideLoading();
+    showError(err.message);
+  }
+}
+
+/* ── OpenAI ─────────────────────────────────────────────────────── */
+async function callOpenAI(question) {
+  const b = S.map.getBounds();
+  const bbox = `${b.getSouth().toFixed(6)},${b.getWest().toFixed(6)},${b.getNorth().toFixed(6)},${b.getEast().toFixed(6)}`;
+
+  const system = `You are an expert at OpenStreetMap and Overpass QL queries.
+Convert geographic questions into Overpass QL queries.
+
+Rules:
+1. Generate 1–3 query variants (different tag combinations or levels of specificity).
+2. Use the provided bounding box by default: [bbox:SOUTH,WEST,NORTH,EAST] in the Overpass settings line.
+   If the user explicitly names a geographic area (city, country, region), use area-based filtering instead.
+3. Always use [out:json][timeout:25] in the settings block.
+4. Always end the query with: out geom;
+   (This includes coordinates for ways and relations, required for map rendering.)
+5. Combine node/way/relation with a union block: ( node[...]; way[...]; relation[...]; )
+6. For every OSM tag used, add an entry in the "tags" array referencing the wiki.
+7. In each tag description clearly explain what the tag DOES and what it does NOT include.
+8. For area-based queries use: area["name"="AREA_NAME"]->.a; ... (area.a); ...
+
+Return ONLY valid JSON matching this schema (no markdown, no code fences):
+{
+  "explanation": "Overall description of the approach",
+  "queries": [
+    {
+      "name": "Short variant name",
+      "description": "What this query finds and what it excludes",
+      "overpassQL": "complete valid Overpass QL string",
+      "tags": [
+        {
+          "tag": "key=value",
+          "url": "https://wiki.openstreetmap.org/wiki/Tag:key%3Dvalue",
+          "description": "What this tag covers and importantly what it does NOT include"
+        }
+      ]
+    }
+  ]
+}`;
+
+  const user = `Geographic question: ${question}
+Current map bounding box (south,west,north,east): ${bbox}
+Use this bbox in your queries unless the user specified a named area.`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${S.apiKey}` },
+    body: JSON.stringify({
+      model: S.model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      max_tokens: 4096,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `OpenAI API error ${res.status}`);
+  }
+
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content || '';
+  try { return JSON.parse(content); }
+  catch { throw new Error('Could not parse AI response. Try again.'); }
+}
+
+/* ── Overpass execution ─────────────────────────────────────────── */
+async function runQuery(idx) {
+  const q = S.queries[idx];
+  if (!q) return;
+
+  setActiveVariant(idx);
+  setStatus(`Executing "${q.name}"...`);
+  setVariantCount(idx, 'Loading...');
+
+  // Replace {{bbox}} placeholder if model used it
+  const b = S.map.getBounds();
+  const bbox = `${b.getSouth().toFixed(6)},${b.getWest().toFixed(6)},${b.getNorth().toFixed(6)},${b.getEast().toFixed(6)}`;
+  const oql = q.overpassQL.replace(/\{\{bbox\}\}/g, bbox);
+
+  try {
+    const data = await fetchOverpass(oql);
+    const elements = (data.elements || []).filter(el =>
+      (el.type === 'node' && el.lat != null) ||
+      (el.type === 'way'  && el.geometry)    ||
+      (el.type === 'relation' && el.members)
+    );
+    S.queries[idx].elements = elements;
+    renderOnMap(idx, elements);
+    renderResultsList();
+    const countLabel = elements.length > 1000
+      ? `${elements.length} results (map shows first 1000)`
+      : `${elements.length} result${elements.length !== 1 ? 's' : ''}`;
+    setVariantCount(idx, countLabel);
+    setStatus(`"${q.name}" — ${elements.length} results`);
+    updateStatusResults();
+
+    // Fit to results if there are any
+    if (elements.length > 0) fitResults();
+  } catch (err) {
+    setVariantCount(idx, 'Error');
+    setStatus(`Query error: ${err.message}`);
+  }
+}
+
+async function fetchOverpass(oql) {
+  const res = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `data=${encodeURIComponent(oql)}`,
+  });
+  if (!res.ok) throw new Error(`Overpass API error ${res.status}`);
+  const text = await res.text();
+  try {
+    const json = JSON.parse(text);
+    if (json.remark && !json.elements) throw new Error(json.remark);
+    return json;
+  } catch (e) {
+    if (e.message.startsWith('Overpass') || e.message.startsWith('runtime')) throw e;
+    throw new Error('Failed to parse Overpass response');
+  }
+}
+
+/* ── Map rendering ──────────────────────────────────────────────── */
+function renderOnMap(idx, elements) {
+  if (S.queries[idx].layerGroup) S.map.removeLayer(S.queries[idx].layerGroup);
+  const color   = COLORS[idx % COLORS.length];
+  const lg      = L.layerGroup().addTo(S.map);
+  const elLayers = new Map();
+
+  // Limit rendering for performance; excess elements are still listed in the results panel
+  const MAX_RENDER = 1000;
+  const toRender = elements.slice(0, MAX_RENDER);
+
+  toRender.forEach(el => {
+    const eid   = elId(el);
+    const name  = elName(el);
+    let layer   = null;
+
+    if (el.type === 'node') {
+      layer = L.circleMarker([el.lat, el.lon], nodeStyle(color));
+    } else if (el.type === 'way' && el.geometry) {
+      const pts     = el.geometry.map(p => [p.lat, p.lon]);
+      const firstPt = pts[0];
+      const lastPt  = pts[pts.length - 1];
+      const closed  = pts.length > 2 && firstPt[0] === lastPt[0] && firstPt[1] === lastPt[1];
+      layer = closed && isAreaEl(el.tags)
+        ? L.polygon(pts,  polyStyle(color))
+        : L.polyline(pts, lineStyle(color));
+    } else if (el.type === 'relation' && el.members) {
+      const ways = el.members.filter(m => m.type === 'way' && m.geometry);
+      if (ways.length) {
+        layer = L.polyline(ways.map(w => w.geometry.map(p => [p.lat, p.lon])), lineStyle(color));
+      }
+    }
+
+    if (layer) {
+      layer.bindPopup(buildPopup(el, name, color));
+      layer.on('click', () => { toggleSel(eid); renderResultsList(); });
+      layer.on('mouseover', () => hlLayer(layer, el.type, true,  color));
+      layer.on('mouseout',  () => { if (!S.selectedIds.has(eid)) hlLayer(layer, el.type, false, color); });
+      lg.addLayer(layer);
+      elLayers.set(eid, layer);
+    }
+  });
+
+  S.queries[idx].layerGroup    = lg;
+  S.queries[idx].elementLayers = elLayers;
+}
+
+function nodeStyle(c) { return { radius: STYLE.NODE_RADIUS, fillColor: c, color: '#fff', weight: STYLE.NODE_WEIGHT, fillOpacity: 0.85, opacity: 1 }; }
+function lineStyle(c) { return { color: c, weight: STYLE.LINE_WEIGHT, opacity: 0.8 }; }
+function polyStyle(c) { return { color: c, weight: 2, fillColor: c, fillOpacity: 0.18, opacity: 0.8 }; }
+
+function isAreaEl(tags = {}) {
+  return ['building','landuse','leisure','natural','amenity','shop'].some(k => k in tags) || tags.area === 'yes';
+}
+
+function elId(el)   { return `${el.type}-${el.id}`; }
+function elName(el) {
+  const t = el.tags || {};
+  return t.name || t['name:en'] || t.ref || `${el.type} ${el.id}`;
+}
+
+function buildPopup(el, name, color) {
+  const tags = el.tags || {};
+  const rows = Object.entries(tags).slice(0, 8).map(([k, v]) =>
+    `<div style="display:flex;gap:8px;padding:2px 0;font-size:11px;"><span style="color:var(--text-1);min-width:75px;flex-shrink:0;">${esc(k)}</span><span>${esc(v)}</span></div>`
+  ).join('');
+  const more = Object.keys(tags).length > 8 ? `<div style="font-size:10px;color:var(--text-2);margin-top:3px;">+${Object.keys(tags).length - 8} more tags</div>` : '';
+  return `<div style="min-width:200px;max-width:280px;"><div style="font-weight:700;margin-bottom:5px;color:${color};">${esc(name)}</div><div style="font-size:10px;color:var(--text-2);margin-bottom:6px;">${el.type.toUpperCase()} #${el.id}</div>${rows}${more}</div>`;
+}
+
+function hlLayer(layer, type, on, color) {
+  try {
+    if (type === 'node') layer.setStyle({ weight: on ? STYLE.NODE_WEIGHT_HL : STYLE.NODE_WEIGHT, radius: on ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
+    else layer.setStyle({ weight: on ? STYLE.LINE_WEIGHT_HL : STYLE.LINE_WEIGHT, opacity: on ? 1 : 0.8 });
+  } catch(_) {}
+}
+
+function clearAllLayers() {
+  S.queries.forEach(q => { if (q.layerGroup) S.map.removeLayer(q.layerGroup); });
+}
+
+/* ── Results list ───────────────────────────────────────────────── */
+function renderResultsList() {
+  const container = document.getElementById('resultsList');
+  const empty     = document.getElementById('resultsEmpty');
+
+  const all = [];
+  S.queries.forEach((q, qi) => (q.elements || []).forEach(el => all.push({ el, qi })));
+
+  if (!all.length) { empty.style.display = 'flex'; container.innerHTML = ''; container.appendChild(empty); return; }
+  empty.style.display = 'none';
+
+  const MAX_LIST = 500;
+  const frag = document.createDocumentFragment();
+
+  all.slice(0, MAX_LIST).forEach(({ el, qi }) => {
+    const color = COLORS[qi % COLORS.length];
+    const eid   = elId(el);
+    const sel   = S.selectedIds.has(eid);
+
+    const item = document.createElement('div');
+    item.className = `result-item${sel ? ' selected' : ''}`;
+    item.dataset.eid = eid;
+    item.innerHTML = `
+      <div class="result-bar" style="background:${color};"></div>
+      <div class="result-inner">
+        <div class="result-name">${esc(elName(el))}</div>
+        <div class="result-meta">${el.type} &bull; ${esc(S.queries[qi]?.name || '')}</div>
+      </div>`;
+    item.addEventListener('click', () => {
+      toggleSel(eid);
+      renderResultsList();
+      flyTo(el, qi);
+    });
+    frag.appendChild(item);
+  });
+
+  if (all.length > MAX_LIST) {
+    const note = document.createElement('div');
+    note.className = 'results-limit-note';
+    note.textContent = `Showing ${MAX_LIST} of ${all.length} results`;
+    frag.appendChild(note);
+  }
+
+  container.innerHTML = '';
+  container.appendChild(empty);
+  empty.style.display = 'none';
+  container.appendChild(frag);
+}
+
+function flyTo(el, qi) {
+  if (el.type === 'node') {
+    S.map.flyTo([el.lat, el.lon], Math.max(S.map.getZoom(), 16), { duration: 0.4 });
+  } else {
+    const layer = S.queries[qi]?.elementLayers?.get(elId(el));
+    if (layer?.getBounds) S.map.flyToBounds(layer.getBounds(), { padding: [40, 40], duration: 0.4 });
+  }
+}
+
+function fitResults() {
+  const pts = [];
+  S.queries.forEach(q => {
+    (q.elements || []).forEach(el => {
+      if (el.type === 'node') pts.push([el.lat, el.lon]);
+      else if (el.type === 'way' && el.geometry) el.geometry.forEach(p => pts.push([p.lat, p.lon]));
+    });
+  });
+  if (pts.length) S.map.fitBounds(L.latLngBounds(pts), { padding: [30, 30] });
+}
+
+/* ── Selection ──────────────────────────────────────────────────── */
+function toggleSel(eid) {
+  if (S.selectedIds.has(eid)) S.selectedIds.delete(eid);
+  else S.selectedIds.add(eid);
+  syncLayerStyles();
+  updateStatusResults();
+}
+
+function clearSelection() {
+  S.selectedIds.clear();
+  syncLayerStyles();
+  renderResultsList();
+  updateStatusResults();
+}
+
+function syncLayerStyles() {
+  S.queries.forEach((q, qi) => {
+    const color = COLORS[qi % COLORS.length];
+    q.elementLayers?.forEach((layer, eid) => {
+      const el  = q.elements.find(e => elId(e) === eid);
+      if (!el) return;
+      const sel = S.selectedIds.has(eid);
+      try {
+        if (el.type === 'node') {
+          layer.setStyle({ fillColor: sel ? '#fff' : color, color: sel ? color : '#fff', weight: sel ? STYLE.NODE_WEIGHT_SEL : STYLE.NODE_WEIGHT, radius: sel ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
+        } else {
+          layer.setStyle({ color: sel ? '#fff' : color, weight: sel ? STYLE.LINE_WEIGHT_SEL : STYLE.LINE_WEIGHT, opacity: sel ? 1 : 0.8 });
+        }
+      } catch(_) {}
+    });
+  });
+}
+
+/* ── Brush selection ────────────────────────────────────────────── */
+function toggleBrush() {
+  S.brush.active = !S.brush.active;
+  document.getElementById('brushBtn').classList.toggle('active', S.brush.active);
+
+  if (S.brush.active) {
+    S.map.dragging.disable();
+    S.map.scrollWheelZoom.disable();
+    S.map.doubleClickZoom.disable();
+
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:absolute;inset:0;z-index:1500;cursor:crosshair;';
+    document.querySelector('.map-container').appendChild(overlay);
+    S.brush.overlayEl = overlay;
+
+    overlay.addEventListener('mousedown',  onBrushDown);
+    overlay.addEventListener('mousemove',  onBrushMove);
+    overlay.addEventListener('mouseup',    onBrushUp);
+    overlay.addEventListener('mouseleave', onBrushUp);
+  } else {
+    S.map.dragging.enable();
+    S.map.scrollWheelZoom.enable();
+    S.map.doubleClickZoom.enable();
+    S.brush.overlayEl?.remove();
+    S.brush.overlayEl = null;
+    S.brush.start = null;
+    if (S.brush.rectLayer) { S.map.removeLayer(S.brush.rectLayer); S.brush.rectLayer = null; }
+  }
+}
+
+function pxToLatLng(e) {
+  const r = document.getElementById('map').getBoundingClientRect();
+  return S.map.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top));
+}
+
+function onBrushDown(e)  { S.brush.start = pxToLatLng(e); }
+function onBrushMove(e)  {
+  if (!S.brush.start) return;
+  const cur = pxToLatLng(e);
+  const bounds = L.latLngBounds(S.brush.start, cur);
+  if (S.brush.rectLayer) S.map.removeLayer(S.brush.rectLayer);
+  S.brush.rectLayer = L.rectangle(bounds, { color: '#0a84ff', weight: 1, fillColor: '#0a84ff', fillOpacity: 0.08, dashArray: '5 3' }).addTo(S.map);
+}
+function onBrushUp(e)    {
+  if (!S.brush.start) return;
+  const cur    = pxToLatLng(e);
+  const bounds = L.latLngBounds(S.brush.start, cur);
+  S.brush.start = null;
+
+  S.selectedIds.clear();
+  S.queries.forEach(q => {
+    (q.elements || []).forEach(el => {
+      let hit = false;
+      if (el.type === 'node') hit = bounds.contains([el.lat, el.lon]);
+      else if (el.type === 'way' && el.geometry) hit = el.geometry.some(p => bounds.contains([p.lat, p.lon]));
+      if (hit) S.selectedIds.add(elId(el));
+    });
+  });
+
+  syncLayerStyles();
+  renderResultsList();
+  updateStatusResults();
+  toggleBrush(); // deactivate after selection
+}
+
+/* ── Query variant UI ───────────────────────────────────────────── */
+function renderQueryOutput(explanation, queries) {
+  document.getElementById('explanationBox').textContent = explanation;
+
+  const vc = document.getElementById('queryVariants');
+  vc.innerHTML = '';
+
+  queries.forEach((q, idx) => {
+    const color = COLORS[idx % COLORS.length];
+    const div   = document.createElement('div');
+    div.className = `query-variant${idx === 0 ? ' active' : ''}`;
+    div.dataset.idx = idx;
+
+    div.innerHTML = `
+      <div class="qv-header">
+        <div class="qv-dot" style="background:${color};"></div>
+        <span class="qv-name">${esc(q.name)}</span>
+        <span class="qv-vis" data-idx="${idx}" title="Toggle visibility">hide</span>
+        <span class="qv-count" data-idx="${idx}">-</span>
+      </div>
+      <div class="qv-body">
+        ${esc(q.description)}
+        <div><button class="qv-code-toggle" data-idx="${idx}">Show query</button></div>
+        <pre class="qv-code" data-idx="${idx}">${esc(q.overpassQL)}</pre>
+      </div>`;
+
+    // Click header → activate + execute if needed
+    div.querySelector('.qv-header').addEventListener('click', async e => {
+      if (e.target.classList.contains('qv-vis')) return; // handled separately
+      document.querySelectorAll('.query-variant').forEach(el => el.classList.remove('active'));
+      div.classList.add('active');
+      if (!S.queries[idx]?.elements?.length) await runQuery(idx);
+    });
+
+    // Visibility toggle
+    div.querySelector('.qv-vis').addEventListener('click', e => {
+      e.stopPropagation();
+      const q2 = S.queries[idx];
+      if (!q2) return;
+      q2.visible = !q2.visible;
+      e.target.textContent = q2.visible ? 'hide' : 'show';
+      if (q2.layerGroup) {
+        if (q2.visible) S.map.addLayer(q2.layerGroup);
+        else S.map.removeLayer(q2.layerGroup);
+      }
+    });
+
+    // Code toggle
+    div.querySelector('.qv-code-toggle').addEventListener('click', e => {
+      const pre = div.querySelector('.qv-code');
+      const on  = pre.style.display === 'block';
+      pre.style.display = on ? 'none' : 'block';
+      e.target.textContent = on ? 'Show query' : 'Hide query';
+    });
+
+    vc.appendChild(div);
+  });
+
+  // Wiki references (deduplicated)
+  const seen = new Set(), allTags = [];
+  queries.forEach(q => (q.tags || []).forEach(t => { if (!seen.has(t.tag)) { seen.add(t.tag); allTags.push(t); } }));
+
+  const wikiList = document.getElementById('wikiRefsList');
+  wikiList.innerHTML = '';
+  if (allTags.length) {
+    document.getElementById('wikiSection').style.display = 'block';
+    allTags.forEach(t => {
+      const d = document.createElement('div');
+      d.className = 'wiki-ref';
+      d.innerHTML = `<div class="wiki-tag"><a href="${safeUrl(t.url)}" target="_blank" rel="noopener noreferrer">${esc(t.tag)}</a></div><div class="wiki-desc">${esc(t.description)}</div>`;
+      wikiList.appendChild(d);
+    });
+  } else {
+    document.getElementById('wikiSection').style.display = 'none';
+  }
+
+  document.getElementById('queryOutput').style.display = 'block';
+}
+
+function setActiveVariant(idx) {
+  document.querySelectorAll('.query-variant').forEach((el, i) => el.classList.toggle('active', i === idx));
+}
+
+function setVariantCount(idx, text) {
+  const el = document.querySelector(`.qv-count[data-idx="${idx}"]`);
+  if (el) el.textContent = text;
+}
+
+/* ── GPX export ─────────────────────────────────────────────────── */
+function exportGPX() {
+  const all = [];
+  S.queries.forEach((q, qi) => {
+    (q.elements || []).forEach(el => {
+      const eid = elId(el);
+      if (!S.selectedIds.size || S.selectedIds.has(eid)) all.push({ el, qname: q.name });
+    });
+  });
+
+  if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
+
+  const now = new Date().toISOString();
+  let wpts = '', trks = '';
+
+  all.forEach(({ el, qname }) => {
+    const name = elName(el);
+    const tags = el.tags || {};
+    const desc = Object.entries(tags).slice(0, 6).map(([k, v]) => `${k}=${v}`).join('; ');
+
+    if (el.type === 'node') {
+      wpts += `  <wpt lat="${el.lat}" lon="${el.lon}">\n    <name>${escXml(name)}</name>\n    <desc>${escXml(desc)}</desc>\n  </wpt>\n`;
+    } else if (el.type === 'way' && el.geometry) {
+      const pts = el.geometry.map(p => `      <trkpt lat="${p.lat}" lon="${p.lon}"/>`).join('\n');
+      trks += `  <trk>\n    <name>${escXml(name)}</name>\n    <desc>${escXml(desc)}</desc>\n    <trkseg>\n${pts}\n    </trkseg>\n  </trk>\n`;
+    }
+  });
+
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Overpass AI" xmlns="http://www.topografix.com/GPX/1/1">\n  <metadata><name>Overpass AI Export</name><time>${now}</time></metadata>\n${wpts}${trks}</gpx>`;
+
+  const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `overpass-ai-${Date.now()}.gpx`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ── Utility ────────────────────────────────────────────────────── */
+function showLoading(text) {
+  document.getElementById('loadingText').textContent = text;
+  document.getElementById('loadingState').style.display = 'block';
+  document.getElementById('generateBtn').disabled = true;
+  setStatus(text);
+}
+function hideLoading() {
+  document.getElementById('loadingState').style.display = 'none';
+  document.getElementById('generateBtn').disabled = false;
+}
+function showError(msg) {
+  document.getElementById('errorText').textContent = msg;
+  document.getElementById('errorState').style.display = 'block';
+  setStatus('Error');
+}
+function hideError() { document.getElementById('errorState').style.display = 'none'; }
+
+function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escXml(s) { return esc(s).replace(/'/g, '&apos;'); }
+/** Allow only http/https URLs to prevent javascript: XSS in href attributes */
+function safeUrl(url) {
+  const s = String(url ?? '').trim();
+  return /^https?:\/\//i.test(s) ? s : '#';
+}
+
+/* ── Bootstrap ──────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>

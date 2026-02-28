@@ -1,0 +1,10 @@
+{
+  "name": "overpass-ai",
+  "version": "1.0.0",
+  "description": "AI-powered Overpass QL query tool for OpenStreetMap",
+  "private": true,
+  "scripts": {
+    "start": "npx serve . -p 3000",
+    "dev":   "npx serve . -p 3000 --no-clipboard"
+  }
+}
