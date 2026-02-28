@@ -459,39 +459,90 @@ async function handleGenerate() {
   document.getElementById('queryOutput').style.display = 'none';
   showLoading('Generating query...');
 
-  try {
-    const result = await callOpenAI(question);
-    hideLoading();
-    S.queries = (result.queries || []).map(q => ({
-      ...q, elements: [], layerGroup: null, elementLayers: new Map(), visible: true,
-    }));
-    renderQueryOutput(result.explanation || '', result.queries || []);
-    if (S.queries.length) await runQuery(0);
-  } catch (err) {
-    hideLoading();
-    showError(err.message);
+  const MAX_RETRIES = 2;
+  let retryContext = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      if (attempt > 0) showLoading(`Retrying with corrections (attempt ${attempt + 1} of ${MAX_RETRIES + 1})...`);
+
+      const result = await callOpenAI(question, retryContext);
+
+      // Validate that tags have documented OSM wiki pages
+      const invalidTags = await checkWikiTags(result.queries || []);
+      if (invalidTags.length > 0) {
+        const tagList = invalidTags.map(t => t.tag).join(', ');
+        if (attempt < MAX_RETRIES) {
+          showLoading(`Tags not found in OSM wiki: ${tagList}. Retrying with valid tags (attempt ${attempt + 2} of ${MAX_RETRIES + 1})...`);
+          retryContext = {
+            previousResult: result,
+            feedback: `The following OSM tags are not documented in the OpenStreetMap wiki and must not be used: ${tagList}. Please replace them with well-documented tags that have wiki pages (e.g. amenity=*, highway=*, shop=*, bicycle=*, etc.).`,
+          };
+          continue;
+        }
+        // Final attempt — warn user but proceed with what we have
+        showError(`Note: some tags may not be well-documented in the OSM wiki: ${tagList}`);
+      }
+
+      hideLoading();
+      clearAllLayers();
+      S.queries = (result.queries || []).map(q => ({
+        ...q, elements: [], layerGroup: null, elementLayers: new Map(), visible: true,
+      }));
+      renderQueryOutput(result.explanation || '', result.queries || []);
+
+      if (!S.queries.length) break;
+
+      const queryResult = await runQuery(0);
+
+      if (queryResult?.error && attempt < MAX_RETRIES) {
+        showLoading(`Overpass query error detected. Retrying with fix (attempt ${attempt + 2} of ${MAX_RETRIES + 1})...`);
+        retryContext = {
+          previousResult: result,
+          feedback: `The Overpass QL query "${S.queries[0]?.name}" produced this error:\n${queryResult.error}\n\nProblematic Overpass QL:\n${queryResult.overpassQL}\n\nPlease correct the Overpass QL syntax. Most common mistake: placing [bbox:...] inside node/way/relation filters instead of the global settings line. The correct format is:\n[out:json][timeout:25][bbox:SOUTH,WEST,NORTH,EAST];\n(node[key=value];way[key=value];relation[key=value];);\nout geom;`,
+        };
+        continue;
+      }
+
+      break; // Success (or no more retries)
+    } catch (err) {
+      hideLoading();
+      showError(err.message);
+      return;
+    }
   }
+
+  hideLoading();
 }
 
 /* ── OpenAI ─────────────────────────────────────────────────────── */
-async function callOpenAI(question) {
+async function callOpenAI(question, retryContext = null) {
   const b = S.map.getBounds();
   const bbox = `${b.getSouth().toFixed(6)},${b.getWest().toFixed(6)},${b.getNorth().toFixed(6)},${b.getEast().toFixed(6)}`;
 
   const system = `You are an expert at OpenStreetMap and Overpass QL queries.
 Convert geographic questions into Overpass QL queries.
+Reference: https://wiki.openstreetmap.org/wiki/Overpass_API/Overpass_QL
 
 Rules:
 1. Generate 1–3 query variants (different tag combinations or levels of specificity).
-2. Use the provided bounding box by default: [bbox:SOUTH,WEST,NORTH,EAST] in the Overpass settings line.
+2. Use the provided bounding box ONLY in the global settings line:
+   [out:json][timeout:25][bbox:SOUTH,WEST,NORTH,EAST];
+   NEVER place [bbox:...] inside node/way/relation filters — that is invalid Overpass QL syntax.
+   ✓ CORRECT: [out:json][timeout:25][bbox:52.3,4.8,52.4,4.9];(node[amenity=cafe];way[amenity=cafe];relation[amenity=cafe];);out geom;
+   ✗ WRONG:   [out:json][timeout:25];(node[amenity=cafe][bbox:52.3,4.8,52.4,4.9];way[amenity=cafe][bbox:52.3,4.8,52.4,4.9];relation[amenity=cafe][bbox:52.3,4.8,52.4,4.9];);out geom;
    If the user explicitly names a geographic area (city, country, region), use area-based filtering instead.
 3. Always use [out:json][timeout:25] in the settings block.
 4. Always end the query with: out geom;
    (This includes coordinates for ways and relations, required for map rendering.)
 5. Combine node/way/relation with a union block: ( node[...]; way[...]; relation[...]; )
-6. For every OSM tag used, add an entry in the "tags" array referencing the wiki.
+6. For every OSM tag used, add an entry in the "tags" array referencing the OSM wiki.
+   Only use tags that are well-documented on the OSM wiki (https://wiki.openstreetmap.org).
+   Most-used tags (amenity, highway, shop, bicycle, building, etc.) have wiki pages.
 7. In each tag description clearly explain what the tag DOES and what it does NOT include.
 8. For area-based queries use: area["name"="AREA_NAME"]->.a; ... (area.a); ...
+9. Overpass QL tag filters use key=value syntax, e.g. [amenity=cafe], [highway=cycleway].
+   Colons are only valid inside a key name itself (e.g. [addr:city=Amsterdam]).
 
 Return ONLY valid JSON matching this schema (no markdown, no code fences):
 {
@@ -516,12 +567,22 @@ Return ONLY valid JSON matching this schema (no markdown, no code fences):
 Current map bounding box (south,west,north,east): ${bbox}
 Use this bbox in your queries unless the user specified a named area.`;
 
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+
+  if (retryContext) {
+    messages.push({ role: 'assistant', content: JSON.stringify(retryContext.previousResult) });
+    messages.push({ role: 'user', content: retryContext.feedback });
+  }
+
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${S.apiKey}` },
     body: JSON.stringify({
       model: S.model,
-      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      messages,
       response_format: { type: 'json_object' },
       temperature: 0.2,
       max_tokens: 4096,
@@ -539,10 +600,46 @@ Use this bbox in your queries unless the user specified a named area.`;
   catch { throw new Error('Could not parse AI response. Try again.'); }
 }
 
+/* ── Wiki tag validation ────────────────────────────────────────── */
+async function checkWikiTags(queries) {
+  const allTags = [];
+  const seen = new Set();
+  queries.forEach(q => (q.tags || []).forEach(t => {
+    if (!seen.has(t.tag)) { seen.add(t.tag); allTags.push(t); }
+  }));
+  if (!allTags.length) return [];
+
+  // For each tag generate candidate page titles (URL title + Key:keyname fallback)
+  const checks = allTags.map(t => {
+    const urlMatch = (t.url || '').match(/wiki\.openstreetmap\.org\/wiki\/(.+)$/);
+    const urlTitle = urlMatch ? decodeURIComponent(urlMatch[1]) : null;
+    const keyTitle = t.tag.includes('=') ? `Key:${t.tag.split('=')[0]}` : `Key:${t.tag}`;
+    const titles = [...new Set([urlTitle, keyTitle].filter(Boolean))];
+    return { tag: t, titles, titlesLower: titles.map(s => s.toLowerCase()) };
+  });
+
+  const allTitles = [...new Set(checks.flatMap(c => c.titles))].slice(0, 50);
+  if (!allTitles.length) return [];
+
+  try {
+    const apiUrl = `https://wiki.openstreetmap.org/w/api.php?action=query&titles=${allTitles.map(encodeURIComponent).join('|')}&format=json&origin=*`;
+    const res = await fetch(apiUrl);
+    const data = await res.json();
+    const pages = Object.values(data.query?.pages || {});
+    const existingTitles = new Set(pages.filter(p => !('missing' in p)).map(p => p.title.toLowerCase()));
+    // A tag is invalid only if ALL its candidate titles are missing
+    return checks
+      .filter(c => c.titlesLower.every(t => !existingTitles.has(t)))
+      .map(c => c.tag);
+  } catch (_) {
+    return []; // If the check fails, assume all tags are valid
+  }
+}
+
 /* ── Overpass execution ─────────────────────────────────────────── */
 async function runQuery(idx) {
   const q = S.queries[idx];
-  if (!q) return;
+  if (!q) return null;
 
   setActiveVariant(idx);
   setStatus(`Executing "${q.name}"...`);
@@ -572,9 +669,11 @@ async function runQuery(idx) {
 
     // Fit to results if there are any
     if (elements.length > 0) fitResults();
+    return { error: null };
   } catch (err) {
     setVariantCount(idx, 'Error');
     setStatus(`Query error: ${err.message}`);
+    return { error: err.message, overpassQL: oql };
   }
 }
 
@@ -584,16 +683,31 @@ async function fetchOverpass(oql) {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `data=${encodeURIComponent(oql)}`,
   });
-  if (!res.ok) throw new Error(`Overpass API error ${res.status}`);
   const text = await res.text();
+  if (!res.ok) {
+    const errText = extractOverpassError(text);
+    throw new Error(errText || `Overpass API error ${res.status}`);
+  }
   try {
     const json = JSON.parse(text);
     if (json.remark && !json.elements) throw new Error(json.remark);
     return json;
   } catch (e) {
     if (e.message.startsWith('Overpass') || e.message.startsWith('runtime')) throw e;
+    const errText = extractOverpassError(text);
+    if (errText) throw new Error(errText);
     throw new Error('Failed to parse Overpass response');
   }
+}
+
+function extractOverpassError(html) {
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const errors = [...doc.querySelectorAll('p')]
+      .map(p => p.textContent.trim())
+      .filter(t => /error/i.test(t) && t.length > 0);
+    return errors.join(' ');
+  } catch (_) { return ''; }
 }
 
 /* ── Map rendering ──────────────────────────────────────────────── */
