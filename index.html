@@ -467,7 +467,7 @@ const S = {
   queries: [],      // [{name, description, overpassQL, tags, elements, layerGroup, elementLayers, areaFallbacks, visible}]
   selectedIds: new Set(),
   brush: { active: false, start: null, overlayEl: null, rectLayer: null },
-  savedSearches: [], // [{id, question, queries, savedAt, hidden}]
+  savedSearches: [], // [{id, question, queries:[{..., cachedElements}], savedAt, hidden}]
   shownSearches: {}, // id → { layerGroups: L.LayerGroup[], areaFallbacks: [] }
   currentQuestion: '',
 };
@@ -1789,7 +1789,7 @@ function saveSearch(question, queries, variantIdx) {
   const entry = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     question: question || '',
-    queries: queries.map(q => ({ name: q.name, description: q.description, overpassQL: q.overpassQL, tags: q.tags })),
+    queries: queries.map(q => ({ name: q.name, description: q.description, overpassQL: q.overpassQL, tags: q.tags, cachedElements: S.queries.find(sq => sq.overpassQL === q.overpassQL)?.elements || [] })),
     activeVariant: variantIdx,
     savedAt: new Date().toISOString(),
     hidden: false,
@@ -1847,14 +1847,19 @@ async function showSavedSearchOnMap(id) {
   for (let qi = 0; qi < queriesToRun.length; qi++) {
     const q = queriesToRun[qi];
     const qColor = _colorForShownQuery(id, qi);
-    const oql = q.overpassQL.replace(/\{\{bbox\}\}/g, bbox);
     try {
-      const data = await fetchOverpass(oql);
-      const elements = (data.elements || []).filter(el =>
-        (el.type === 'node' && el.lat != null) ||
-        (el.type === 'way'  && el.geometry)    ||
-        (el.type === 'relation' && el.members)
-      );
+      let elements;
+      if (q.cachedElements && q.cachedElements.length > 0) {
+        elements = q.cachedElements;
+      } else {
+        const oql = q.overpassQL.replace(/\{\{bbox\}\}/g, bbox);
+        const data = await fetchOverpass(oql);
+        elements = (data.elements || []).filter(el =>
+          (el.type === 'node' && el.lat != null) ||
+          (el.type === 'way'  && el.geometry)    ||
+          (el.type === 'relation' && el.members)
+        );
+      }
       const lg = L.layerGroup().addTo(S.map);
       const MAX_RENDER = 1000;
       elements.slice(0, MAX_RENDER).forEach(el => {
@@ -1909,9 +1914,25 @@ function loadSavedSearch(id) {
   document.getElementById('questionInput').value = entry.question;
   document.getElementById('examplesSection').style.display = 'none';
   clearAllLayers();
-  S.queries = entry.queries.map(q => ({ ...q, elements: [], layerGroup: null, elementLayers: new Map(), areaFallbacks: [], visible: true }));
+  S.queries = entry.queries.map(q => ({ ...q, elements: q.cachedElements || [], layerGroup: null, elementLayers: new Map(), areaFallbacks: [], visible: true }));
   renderQueryOutput('', entry.queries);
-  setTimeout(() => runQuery(entry.activeVariant ?? 0), 100);
+  const activeIdx = entry.activeVariant ?? 0;
+  const cached = S.queries[activeIdx]?.elements;
+  if (cached && cached.length > 0) {
+    setTimeout(() => {
+      setActiveVariant(activeIdx);
+      renderOnMap(activeIdx, cached);
+      renderResultsList();
+      const countLabel = cached.length > 1000
+        ? `${cached.length} results (map shows first 1000)`
+        : `${cached.length} result${cached.length !== 1 ? 's' : ''}`;
+      setVariantCount(activeIdx, countLabel);
+      updateStatusResults();
+      if (cached.length > 0) fitResults();
+    }, 100);
+  } else {
+    setTimeout(() => runQuery(activeIdx), 100);
+  }
 }
 
 function renderSavedSearches() {
