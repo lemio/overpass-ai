@@ -545,6 +545,10 @@ Rules:
    - Countries: area["name"="COUNTRY"]["admin_level"="2"]->.a;
    - States/provinces: area["name"="REGION"]["admin_level"="4"]->.a;
    - Cities/municipalities: area["name"="CITY"]["admin_level"="8"]->.a;
+   IMPORTANT: OSM stores area names in the LOCAL language, not English. Always translate the area name
+   to its native/local form. Examples: "Netherlands" → "Nederland", "Germany" → "Deutschland",
+   "Spain" → "España", "France" → "France", "Japan" → "日本", "China" → "中国".
+   If unsure of the local name, also try the English name as a fallback variant.
    Always place the area filter (area.a) inside EACH node/way/relation filter:
    ✓ CORRECT: area["name"="Amsterdam"]["admin_level"="8"]->.a;(node["amenity"="school"](area.a);way["amenity"="school"](area.a);relation["amenity"="school"](area.a););out geom;
    ✗ WRONG:   area["name"="Amsterdam"]->.a;(node["amenity"="school"];way["amenity"="school"];relation["amenity"="school"];);out geom;
@@ -552,6 +556,41 @@ Rules:
    Colons are only valid inside a key name itself (e.g. [addr:city=Amsterdam]).
 10. When using specific subtags that may not be universally applied (e.g. school:level, sport, cuisine),
     always include a broader fallback query variant (e.g. just amenity=school) in addition to the specific one.
+11. Prefer well-known, commonly used OSM key=value pairs. Here is a reference list of common tags:
+    amenity: restaurant, cafe, fast_food, pub, bar, school, university, hospital, pharmacy, bank,
+             atm, parking, fuel, place_of_worship, cinema, theatre, library, post_office, police,
+             fire_station, toilets, recycling, waste_basket, bench, drinking_water, fountain,
+             bicycle_parking, motorcycle_parking, taxi, bus_station, marketplace, community_centre,
+             social_facility, kindergarten, doctors, dentist, veterinary, charging_station,
+             car_wash, car_rental, bicycle_rental, coworking_space, music_venue, nightclub
+    shop: supermarket, convenience, bakery, butcher, greengrocer, deli, seafood, cheese, chocolate,
+          alcohol, wine, beverages, coffee, clothes, shoes, jewelry, optician, electronics,
+          mobile_phone, computer, books, stationery, toys, sports, outdoor, bicycle, motorcycle,
+          car, car_parts, hardware, furniture, antiques, art, gift, florist, garden_centre, pet,
+          beauty, hairdresser, barber, cosmetics, laundry, dry_cleaning, travel_agency, photo
+    highway: motorway, trunk, primary, secondary, tertiary, residential, service, path,
+             footway, cycleway, steps, pedestrian, track, living_street, unclassified,
+             bus_stop, traffic_signals, crossing, speed_camera, street_lamp
+    leisure: park, garden, playground, pitch, sports_centre, stadium, swimming_pool,
+             golf_course, miniature_golf, fitness_centre, dance, ice_rink, marina, slipway,
+             fishing, nature_reserve, picnic_table, firepit, beach_resort, water_park, dog_park
+    tourism: hotel, motel, hostel, guest_house, apartment, camp_site, caravan_site,
+             wilderness_hut, alpine_hut, attraction, museum, gallery, theme_park, zoo,
+             aquarium, viewpoint, picnic_site, information, artwork
+    natural: wood, scrub, grassland, heath, wetland, water, beach, cliff, peak, volcano,
+             cave_entrance, spring, tree, tree_row, hedge, coastline, sand
+    building: house, apartments, commercial, industrial, retail, office, warehouse, garage,
+              church, cathedral, mosque, synagogue, temple, school, university, hospital, hotel
+    landuse: residential, commercial, industrial, retail, farmland, forest, meadow, grass,
+             orchard, vineyard, cemetery, quarry, landfill, construction, recreation_ground
+    railway: station, halt, tram_stop, subway_entrance, rail, tram, subway, light_rail
+    waterway: river, stream, canal, drain, ditch, dam, weir, waterfall
+    historic: castle, monastery, ruins, archaeological_site, memorial, monument, fort, manor, mill
+    sport: soccer, tennis, basketball, volleyball, swimming, cycling, golf, skiing, climbing,
+           rowing, sailing, equestrian, shooting, archery, table_tennis, badminton, boxing
+    office: company, government, ngo, lawyer, accountant, insurance, estate_agent, architect, it
+    cuisine: italian, french, chinese, japanese, indian, thai, mexican, american, greek, turkish,
+             vietnamese, korean, pizza, burger, sushi, kebab, seafood, vegetarian, vegan
 
 Return ONLY valid JSON matching this schema (no markdown, no code fences):
 {
