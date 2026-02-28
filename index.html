@@ -420,6 +420,13 @@
     <div class="form-group">
       <label class="check-row"><input type="checkbox" id="svgTilesCheck" checked /> Include map background tiles (OpenStreetMap)</label>
     </div>
+    <div class="form-group">
+      <label class="check-row"><input type="checkbox" id="svgLabelCheck" /> Include labels</label>
+      <div id="svgLabelFieldGroup" style="display:none; margin-top:6px;">
+        <label class="label" style="margin-bottom:3px;">Label field</label>
+        <select id="svgLabelField" style="font-size:11px; padding:3px 6px; width:auto;"><option value="name">name</option></select>
+      </div>
+    </div>
     <div class="modal-actions">
       <button class="btn" id="cancelSvgBtn">Cancel</button>
       <button class="btn btn-primary" id="doExportSvgBtn" style="width:auto;padding:6px 18px;"><i class="fa-solid fa-download"></i> Export SVG</button>
@@ -495,12 +502,25 @@ function init() {
 }
 
 function initMap() {
-  S.map = L.map('map', { center: [52.3676, 4.9041], zoom: 13 });
+  // Restore saved map view, falling back to Amsterdam
+  let center = [52.3676, 4.9041], zoom = 13;
+  try {
+    const saved = JSON.parse(localStorage.getItem('map_view') || 'null');
+    if (saved && isFinite(saved.lat) && isFinite(saved.lng) && isFinite(saved.zoom)) {
+      center = [saved.lat, saved.lng]; zoom = saved.zoom;
+    }
+  } catch(_) {}
+  S.map = L.map('map', { center, zoom });
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
   }).addTo(S.map);
-  S.map.on('moveend zoomend', updateStatusBounds);
+  S.map.on('moveend zoomend', () => {
+    updateStatusBounds();
+    // Persist map view so the user can pick up where they left off
+    const c = S.map.getCenter();
+    localStorage.setItem('map_view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: S.map.getZoom() }));
+  });
   S.map.on('zoomend', updateAreaDots);
 }
 
@@ -552,6 +572,9 @@ function bindEvents() {
   document.getElementById('cancelSvgBtn').addEventListener('click', () => document.getElementById('svgExportOverlay').classList.remove('open'));
   document.getElementById('svgExportOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) e.target.classList.remove('open'); });
   document.getElementById('doExportSvgBtn').addEventListener('click', doExportSvg);
+  document.getElementById('svgLabelCheck').addEventListener('change', e => {
+    document.getElementById('svgLabelFieldGroup').style.display = e.target.checked ? '' : 'none';
+  });
 
   // Share
   document.getElementById('shareBtn').addEventListener('click', shareQuery);
@@ -878,6 +901,7 @@ function renderOnMap(idx, elements) {
   const lg      = L.layerGroup().addTo(S.map);
   const elLayers = new Map();
   const areaFallbacks = [];
+  const areaFallbackMap = new Map(); // eid → fallback layer
 
   // Limit rendering for performance; excess elements are still listed in the results panel
   const MAX_RENDER = 1000;
@@ -897,13 +921,25 @@ function renderOnMap(idx, elements) {
       const closed  = pts.length > 2 && firstPt[0] === lastPt[0] && firstPt[1] === lastPt[1];
       if (closed && isAreaEl(el.tags)) {
         layer = L.polygon(pts, polyStyle(color));
-        // Create a fallback dot shown when the polygon is too small to see
-        const center = layer.getBounds().getCenter();
+        // Pre-calculate the geographic center and a threshold zoom for the fallback dot.
+        // The threshold zoom is the zoom level below which the polygon is too small to see
+        // (< AREA_MIN_PX pixels). Using a zoom-based threshold avoids flicker during
+        // Leaflet's zoom animation, where latLngToContainerPoint can return stale values.
+        const bounds = layer.getBounds();
+        const center = bounds.getCenter();
+        let thresholdZoom = null;
+        try {
+          const sw = S.map.latLngToContainerPoint(bounds.getSouthWest());
+          const ne = S.map.latLngToContainerPoint(bounds.getNorthEast());
+          const pxSize = Math.max(Math.abs(ne.x - sw.x), Math.abs(ne.y - sw.y));
+          if (pxSize > 0) thresholdZoom = S.map.getZoom() + Math.log2(pxSize / AREA_MIN_PX);
+        } catch(_) {}
         const fallback = L.circleMarker([center.lat, center.lng], { ...nodeStyle(color), opacity: 0, fillOpacity: 0 });
         fallback.bindPopup(buildPopup(el, name, color));
         fallback.on('click', () => { toggleSel(eid); renderResultsList(); });
         lg.addLayer(fallback);
-        areaFallbacks.push({ poly: layer, fallback, eid });
+        areaFallbacks.push({ poly: layer, fallback, eid, thresholdZoom });
+        areaFallbackMap.set(eid, fallback);
       } else {
         layer = L.polyline(pts, lineStyle(color));
       }
@@ -924,9 +960,10 @@ function renderOnMap(idx, elements) {
     }
   });
 
-  S.queries[idx].layerGroup    = lg;
-  S.queries[idx].elementLayers = elLayers;
-  S.queries[idx].areaFallbacks = areaFallbacks;
+  S.queries[idx].layerGroup     = lg;
+  S.queries[idx].elementLayers  = elLayers;
+  S.queries[idx].areaFallbacks  = areaFallbacks;
+  S.queries[idx].areaFallbackMap = areaFallbackMap;
 
   // Apply initial area-dot logic for the current zoom level
   updateAreaDots();
@@ -945,17 +982,22 @@ function updateAreaDots() {
 }
 function _applyAreaDots() {
   if (!S.map) return;
+  const currentZoom = S.map.getZoom();
   S.queries.forEach((q, qi) => {
     if (!q.areaFallbacks || !q.areaFallbacks.length) return;
     const color = COLORS[qi % COLORS.length];
-    q.areaFallbacks.forEach(({ poly, fallback, eid }) => {
+    q.areaFallbacks.forEach(({ poly, fallback, eid, thresholdZoom }) => {
       try {
-        const bounds = poly.getBounds();
-        if (!bounds.isValid()) return;
-        const sw = S.map.latLngToContainerPoint(bounds.getSouthWest());
-        const ne = S.map.latLngToContainerPoint(bounds.getNorthEast());
-        const pxSize = Math.max(Math.abs(ne.x - sw.x), Math.abs(ne.y - sw.y));
-        const tooSmall = pxSize < AREA_MIN_PX;
+        let tooSmall;
+        if (thresholdZoom != null) {
+          tooSmall = currentZoom < thresholdZoom;
+        } else {
+          const bounds = poly.getBounds();
+          if (!bounds.isValid()) return;
+          const sw = S.map.latLngToContainerPoint(bounds.getSouthWest());
+          const ne = S.map.latLngToContainerPoint(bounds.getNorthEast());
+          tooSmall = Math.max(Math.abs(ne.x - sw.x), Math.abs(ne.y - sw.y)) < AREA_MIN_PX;
+        }
         const sel = S.selectedIds.has(eid);
         if (tooSmall) {
           // Hide polygon, show dot
@@ -1406,7 +1448,12 @@ function openCsvExport() {
     });
   });
 
-  const sortedKeys = Object.keys(tagFreq).sort();
+  // Sort fields by total count (most-filled first), then alphabetically as tie-breaker
+  const sortedKeys = Object.keys(tagFreq).sort((a, b) => {
+    const totalA = [...tagFreq[a].values()].reduce((x, y) => x + y, 0);
+    const totalB = [...tagFreq[b].values()].reduce((x, y) => x + y, 0);
+    return totalB - totalA || a.localeCompare(b);
+  });
   const container  = document.getElementById('csvFieldList');
   container.innerHTML = '';
 
@@ -1503,28 +1550,33 @@ let _tagHighlightState = []; // [{layer, origStyle}]
 function highlightByTagValue(key, value) {
   clearTagHighlight();
   S.queries.forEach((q, qi) => {
-    const color = COLORS[qi % COLORS.length];
     (q.elements || []).forEach(el => {
       const v = (el.tags || {})[key];
+      if (v !== value) return; // only highlight matching elements; don't dim others
       const eid = elId(el);
       const layer = q.elementLayers?.get(eid);
-      if (!layer) return;
-      const matches = v === value;
-      try {
-        if (el.type === 'node') {
-          const cur = { fillColor: layer.options.fillColor, radius: layer.options.radius, opacity: layer.options.opacity, fillOpacity: layer.options.fillOpacity };
-          _tagHighlightState.push({ layer, origStyle: cur });
-          layer.setStyle(matches
-            ? { fillColor: SEL_COLOR, radius: STYLE.NODE_RADIUS_SEL, opacity: 1, fillOpacity: 1 }
-            : { fillColor: color, radius: STYLE.NODE_RADIUS, opacity: 0.25, fillOpacity: 0.25 });
-        } else {
-          const cur = { color: layer.options.color, weight: layer.options.weight, opacity: layer.options.opacity };
-          _tagHighlightState.push({ layer, origStyle: cur });
-          layer.setStyle(matches
-            ? { color: SEL_COLOR, weight: STYLE.LINE_WEIGHT_SEL, opacity: 1 }
-            : { color, weight: STYLE.LINE_WEIGHT, opacity: 0.2 });
-        }
-      } catch(_) {}
+      if (layer) {
+        try {
+          if (el.type === 'node') {
+            const cur = { fillColor: layer.options.fillColor, radius: layer.options.radius, opacity: layer.options.opacity, fillOpacity: layer.options.fillOpacity };
+            _tagHighlightState.push({ layer, origStyle: cur });
+            layer.setStyle({ fillColor: SEL_COLOR, radius: STYLE.NODE_RADIUS_SEL, opacity: 1, fillOpacity: 1 });
+          } else {
+            const cur = { color: layer.options.color, weight: layer.options.weight, opacity: layer.options.opacity };
+            _tagHighlightState.push({ layer, origStyle: cur });
+            layer.setStyle({ color: SEL_COLOR, weight: STYLE.LINE_WEIGHT_SEL, opacity: 1 });
+          }
+        } catch(_) {}
+      }
+      // Also highlight the area fallback dot (shown when polygon is too small to see)
+      const fallback = q.areaFallbackMap?.get(eid);
+      if (fallback) {
+        try {
+          const cur = { fillColor: fallback.options.fillColor, radius: fallback.options.radius, opacity: fallback.options.opacity, fillOpacity: fallback.options.fillOpacity };
+          _tagHighlightState.push({ layer: fallback, origStyle: cur });
+          fallback.setStyle({ fillColor: SEL_COLOR, radius: STYLE.NODE_RADIUS_SEL, opacity: 1, fillOpacity: 1 });
+        } catch(_) {}
+      }
     });
   });
 }
@@ -1561,6 +1613,32 @@ function selectByTagValue(key, value, clickedChip) {
 function openSvgExport() {
   const all = getAllExportElements();
   if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
+
+  // Restore saved SVG export settings
+  try {
+    const saved = JSON.parse(localStorage.getItem('svg_export_settings') || 'null');
+    if (saved) {
+      if (saved.style) {
+        const radio = document.querySelector(`input[name="svgStyle"][value="${CSS.escape(saved.style)}"]`);
+        if (radio) radio.checked = true;
+      }
+      if (typeof saved.tiles === 'boolean') document.getElementById('svgTilesCheck').checked = saved.tiles;
+      if (typeof saved.labels === 'boolean') document.getElementById('svgLabelCheck').checked = saved.labels;
+      if (saved.labelField) document.getElementById('svgLabelField').value = saved.labelField;
+    }
+  } catch(_) {}
+
+  // Build the label field dropdown from available tag keys across all elements
+  const labelFieldEl = document.getElementById('svgLabelField');
+  const prevLabelField = labelFieldEl.value;
+  const tagKeys = new Set(['name']);
+  all.forEach(({ el }) => Object.keys(el.tags || {}).forEach(k => tagKeys.add(k)));
+  labelFieldEl.innerHTML = [...tagKeys].sort().map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  if ([...tagKeys].includes(prevLabelField)) labelFieldEl.value = prevLabelField;
+
+  // Toggle label field visibility based on checkbox state
+  const labelGroup = document.getElementById('svgLabelFieldGroup');
+  labelGroup.style.display = document.getElementById('svgLabelCheck').checked ? '' : 'none';
 
   // Build per-query style rows
   const container = document.getElementById('svgQueryStyles');
@@ -1600,7 +1678,19 @@ async function doExportSvg() {
   document.querySelectorAll('#svgQueryStyles .svg-query-select').forEach(sel => {
     queryStyleMap[sel.dataset.key] = sel.value;
   });
-  const includeTiles = document.getElementById('svgTilesCheck').checked;
+  const includeTiles  = document.getElementById('svgTilesCheck').checked;
+  const includeLabels = document.getElementById('svgLabelCheck').checked;
+  const labelField    = document.getElementById('svgLabelField').value || 'name';
+
+  // Persist export settings so the user doesn't have to re-configure on each export
+  try {
+    localStorage.setItem('svg_export_settings', JSON.stringify({
+      style: document.querySelector('input[name="svgStyle"]:checked')?.value || 'areas',
+      tiles: includeTiles,
+      labels: includeLabels,
+      labelField,
+    }));
+  } catch(_) {}
 
   const b     = S.map.getBounds();
   const zoom  = S.map.getZoom();
@@ -1711,7 +1801,9 @@ async function doExportSvg() {
   defs.appendChild(clip);
   svg.insertBefore(defs, svg.firstChild);
 
-  // Draw queries
+  // Draw queries; collect label candidates for later overlap-aware placement
+  const labelCandidates = []; // { text, anchorX, anchorY, isArea, areaMinX, areaMinY, areaMaxX, areaMaxY }
+
   function drawQueryToSvg(q, color, key) {
     if (!q.elements?.length) return;
     const override  = queryStyleMap[key];
@@ -1723,6 +1815,7 @@ async function doExportSvg() {
     (q.elements || []).forEach(el => {
       const name = elName(el);
       const sid  = sanitizeId(name);
+      const labelText = (el.tags || {})[labelField] || '';
 
       if (el.type === 'node' || forceDots) {
         // Point
@@ -1744,6 +1837,7 @@ async function doExportSvg() {
         title.textContent = name;
         circle.appendChild(title);
         group.appendChild(circle);
+        if (includeLabels && labelText) labelCandidates.push({ text: labelText, anchorX: x, anchorY: y, isArea: false });
       } else if (el.type === 'way' && el.geometry) {
         const pts    = el.geometry.map(p => geoToSvg(p.lat, p.lon));
         const pStr   = pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
@@ -1757,12 +1851,24 @@ async function doExportSvg() {
           shape.setAttribute('fill-opacity', '0.2');
           shape.setAttribute('stroke', color);
           shape.setAttribute('stroke-width', '1.5');
+          if (includeLabels && labelText) {
+            const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+            const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+            const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+            labelCandidates.push({ text: labelText, anchorX: cx, anchorY: cy, isArea: true,
+              areaMinX: Math.min(...xs), areaMinY: Math.min(...ys),
+              areaMaxX: Math.max(...xs), areaMaxY: Math.max(...ys) });
+          }
         } else {
           shape = document.createElementNS(svgNS, 'polyline');
           shape.setAttribute('points', pStr);
           shape.setAttribute('fill', 'none');
           shape.setAttribute('stroke', color);
           shape.setAttribute('stroke-width', '2');
+          if (includeLabels && labelText) {
+            const mid = pts[Math.floor(pts.length / 2)];
+            labelCandidates.push({ text: labelText, anchorX: mid.x, anchorY: mid.y, isArea: false });
+          }
         }
         shape.setAttribute('id', sid);
         const title = document.createElementNS(svgNS, 'title');
@@ -1795,6 +1901,74 @@ async function doExportSvg() {
   Object.entries(S.shownSearches).forEach(([id, shown]) => {
     (shown.queries || []).forEach((q, qi) => drawQueryToSvg(q, _colorForShownQuery(id, qi), `shown-${id}-${qi}`));
   });
+
+  // Add text labels with overlap avoidance
+  if (includeLabels && labelCandidates.length) {
+    const FONT_SIZE  = 11;  // px
+    const LABEL_PAD  = 3;   // px gap between anchor and label
+    const CHAR_WIDTH = FONT_SIZE * 0.55; // approx char width
+    const LBL_H     = FONT_SIZE + 2;
+
+    const labelGroup = document.createElementNS(svgNS, 'g');
+    labelGroup.setAttribute('id', 'labels');
+    labelGroup.setAttribute('clip-path', 'url(#artboard-clip)');
+
+    // Occupied rectangles (already placed labels)
+    const occupied = [];
+    function overlaps(r) { return occupied.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y); }
+
+    labelCandidates.forEach(({ text, anchorX, anchorY, isArea, areaMinX, areaMinY, areaMaxX, areaMaxY }) => {
+      if (anchorX < -20 || anchorX > W + 20 || anchorY < -20 || anchorY > H + 20) return;
+      const w = text.length * CHAR_WIDTH + LABEL_PAD * 2;
+      const h = LBL_H;
+      const DOT_R = 5;
+
+      // Candidate positions: centre (for areas), then right/left/top/bottom (for points/lines)
+      const candidates = isArea
+        ? [
+            { x: anchorX - w / 2, y: anchorY - h / 2, tx: anchorX, ty: anchorY, anchor: 'middle' },
+            { x: anchorX - w / 2, y: areaMinY - h - LABEL_PAD, tx: anchorX, ty: areaMinY - LABEL_PAD, anchor: 'middle' },
+            { x: anchorX - w / 2, y: areaMaxY + LABEL_PAD, tx: anchorX, ty: areaMaxY + h + LABEL_PAD, anchor: 'middle' },
+          ]
+        : [
+            { x: anchorX + DOT_R + LABEL_PAD, y: anchorY - h / 2, tx: anchorX + DOT_R + LABEL_PAD, ty: anchorY + FONT_SIZE * 0.35, anchor: 'start' },
+            { x: anchorX - w - DOT_R - LABEL_PAD, y: anchorY - h / 2, tx: anchorX - DOT_R - LABEL_PAD, ty: anchorY + FONT_SIZE * 0.35, anchor: 'end' },
+            { x: anchorX - w / 2, y: anchorY - DOT_R - h - LABEL_PAD, tx: anchorX, ty: anchorY - DOT_R - LABEL_PAD, anchor: 'middle' },
+            { x: anchorX - w / 2, y: anchorY + DOT_R + LABEL_PAD, tx: anchorX, ty: anchorY + DOT_R + h, anchor: 'middle' },
+          ];
+
+      let placed = null;
+      for (const c of candidates) {
+        const rect = { x: c.x, y: c.y, w, h };
+        if (!overlaps(rect)) { placed = { ...c, rect }; break; }
+      }
+      if (!placed) return; // skip if all positions are taken
+
+      occupied.push(placed.rect);
+
+      // White background for readability
+      const bg = document.createElementNS(svgNS, 'rect');
+      bg.setAttribute('x', placed.rect.x.toFixed(2));
+      bg.setAttribute('y', placed.rect.y.toFixed(2));
+      bg.setAttribute('width',  placed.rect.w.toFixed(2));
+      bg.setAttribute('height', placed.rect.h.toFixed(2));
+      bg.setAttribute('fill', 'rgba(255,255,255,0.75)');
+      bg.setAttribute('rx', '2');
+      labelGroup.appendChild(bg);
+
+      const txt = document.createElementNS(svgNS, 'text');
+      txt.setAttribute('x', placed.tx.toFixed(2));
+      txt.setAttribute('y', placed.ty.toFixed(2));
+      txt.setAttribute('text-anchor', placed.anchor);
+      txt.setAttribute('font-family', '-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif');
+      txt.setAttribute('font-size', String(FONT_SIZE));
+      txt.setAttribute('fill', '#111');
+      txt.textContent = text;
+      labelGroup.appendChild(txt);
+    });
+
+    svg.appendChild(labelGroup);
+  }
 
   const serializer = new XMLSerializer();
   const svgStr     = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(svg);
