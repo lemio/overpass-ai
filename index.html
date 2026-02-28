@@ -208,6 +208,27 @@
 
     /* ── Empty state for results ────────────────────────────────── */
     .results-limit-note { padding: 8px 12px; font-size: 11px; color: var(--text-2); text-align: center; border-top: 1px solid var(--border); }
+
+    /* ── Saved searches ──────────────────────────────────────────── */
+    .saved-item {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      margin-bottom: 6px; overflow: hidden;
+    }
+    .saved-item-header {
+      display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+      background: var(--bg-2); user-select: none;
+    }
+    .saved-item-name { flex: 1; font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .saved-item-date { font-size: 10px; color: var(--text-2); white-space: nowrap; }
+    .saved-item-btn { font-size: 10px; padding: 1px 6px; border-radius: 2px; border: 1px solid var(--border-mid); color: var(--text-1); background: var(--bg-3); cursor: pointer; line-height: 1.4; flex-shrink: 0; }
+    .saved-item-btn:hover { background: var(--bg-hover); }
+    .saved-item-btn.danger { border-color: var(--danger); color: var(--danger); }
+    .saved-item-body { padding: 6px 10px; font-size: 11px; color: var(--text-1); line-height: 1.5; border-top: 1px solid var(--border); display: none; }
+    .saved-item.open .saved-item-body { display: block; }
+    .saved-empty { font-size: 11px; color: var(--text-2); text-align: center; padding: 8px 0; }
+
+    /* ── Export CSV button ───────────────────────────────────────── */
+    .results-header-btns { display: flex; gap: 4px; }
   </style>
 </head>
 <body>
@@ -217,6 +238,7 @@
   <div class="topbar">
     <span class="topbar-title">Overpass AI</span>
     <span class="topbar-spacer"></span>
+    <button class="btn btn-sm" id="shareBtn" title="Copy share link to clipboard">Share</button>
     <button class="btn btn-sm" id="settingsBtn">Settings</button>
   </div>
 
@@ -233,8 +255,10 @@
           <textarea id="questionInput" placeholder="e.g. What are all the chocolate stores in the Netherlands?&#10;&#10;Ctrl+Enter to generate"></textarea>
         </div>
 
-        <div class="label">Examples</div>
-        <div class="example-list" id="exampleList"></div>
+        <div id="examplesSection">
+          <div class="label">Examples</div>
+          <div class="example-list" id="exampleList"></div>
+        </div>
 
         <button class="btn btn-primary" id="generateBtn">Generate Query</button>
 
@@ -258,6 +282,12 @@
           </div>
         </div>
 
+        <div id="savedSection" style="margin-top:14px;">
+          <div class="sep"></div>
+          <div class="label" style="margin-bottom:6px;">Saved Searches</div>
+          <div id="savedList"></div>
+        </div>
+
       </div>
     </aside>
 
@@ -275,7 +305,10 @@
     <aside class="panel panel-right">
       <div class="panel-header">
         <span>Results</span>
-        <button class="btn btn-sm" id="exportGpxBtn">Export GPX</button>
+        <div class="results-header-btns">
+          <button class="btn btn-sm" id="exportCsvBtn">Export CSV</button>
+          <button class="btn btn-sm" id="exportGpxBtn">Export GPX</button>
+        </div>
       </div>
       <div class="results-list" id="resultsList">
         <div class="results-empty" id="resultsEmpty">
@@ -329,6 +362,12 @@
 // D3 schemeCategory10 colours (hardcoded to avoid full D3 dependency)
 const COLORS = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
 
+// Selection highlight colour — visible on both dark and light map tiles
+const SEL_COLOR = '#ffcc00';
+
+// Minimum pixel size (max dimension) for area polygons; smaller → shown as dot
+const AREA_MIN_PX = 10;
+
 // Comprehensive OSM tag lookup table — key → array of known values currently in use
 const OSM_TAG_LOOKUP = {"abandoned":["yes"],"abandoned:amenity":["prison","prison_camp"],"abandoned:landuse":["landfill"],"abandoned:place":["yes"],"access":["employees","license","members","military","optional_sidepath","residents","students"],"addr:TW:dataset":["137998"],"addr:housenumber:signed":["no"],"admin_type:PH":["barangay"],"advertising":["flag","sculpture","tarp","totem","wall_painting"],"aerialway:drag_lift":["platter","t-bar"],"aerodrome:type":["airfield","gliding","international","military","private","regional"],"aerospace:product":["robot","rocket","satellite","spacecraft","spacecraft_propulsion"],"aeroway":["airtanker_base","arresting_gear","control_center","flame_trench","landingpad","launch_complex","launchpad","model_runway","spaceport"],"aeroway:balloon":["launchpad"],"aircraft:type":["glider"],"amenity":["animal_effluent_disposal","animal_hitch","animal_training","archive","bear_box","bicycle_library","binoculars","bird_bath","blood_bank","boat_storage","brothel","building_yard","canteen","car_pooling","carpet_washing","chair","check_in","checkpoint","childcare","cloakroom","clothes_dryer","clothing_donation","coffin_rest","compressed_air","concert_hall","coworking_space","dancing_school","device_charging_station","dog_wash","dojo","dormitory","driver_training","entrenamiento","exhibition_centre","feeding_place","festival_grounds","first_aid","first_aid_school","fish_cleaning","fish_spa","flight_school","food_sharing","game_feeding","health_post","hitching_post","juice_bar","karaoke_box","kick-scooter_parking","kick-scooter_rental","kitchen","lavoir","left_luggage","locker","lost_property_office","lounge","luggage_locker","marae","meditation_centre","mist_spraying_cooler","mobile_library","mobility_hub","money_transfer","mortuary","motorcycle_rental","mounting_block","music_venue","nursing_home","nursing_room","osmica","payment_centre","planetarium","polling_station","post_depot","power_supply","practice_bicycle_carrier","printer","prison_camp","produce_collection_centre","reception_desk","rehearsal_studio","rescue_station","retirement_home","rv_storage","sailing_school","sanatorium","scale","scooter_rental","seat","security_booth","security_control","ski_rental","ski_school","small_electric_vehicle_parking","smoking_area","snow_removal_station","social_centre","social_club","stables","stage","stool","stripclub","stroller_parking","student_accommodation","surf_school","swingerclub","table","tool_library","trade_school","traffic_park","training","tuition","vacuum_cleaner","vehicle_ramp","veterinary_pharmacy","vivarium","warehouse","washing_machine","waste_basket;recycling","waste_dump_site","whirlpool","workshop"],"animal":["horse_walker","school"],"animated":["trivision_blades","winding_posters"],"app_operated":["only"],"aquaculture":["fish","seaweed"],"archaeological_site":["amphitheatre","baths","bigstone","cairn","church","city","cliff_dwelling","crannog","desert_kite","earthwork","enclosure","field_system","geoglyph","grave_field","hut_circle","necropolis","petroglyph","rock_painting","roman_circus","roman_villa","souterrain","tomb","trap_pit"],"area:highway":["cycleway","footway","path","pedestrian","steps"],"artwork_subject":["street_art"],"artwork_type":["architecture","coat_of_arms","dwarf","figurine","land_art","relief","street_art"],"asphalt:type":["dense","porous","porous:double","stone_mastic","thin_surface_layer"],"association":["sport","student"],"athletics":["discus_throw","hammer_throw","high_jump","javelin_throw","running","sprint","steeplechase","triple_jump"],"atm":["separate"],"attraction":["alpine_coaster","amusement_ride","balloon_ride","big_wheel","boat_ride","bumper_car","carousel","historic","kiddie_ride","maze","seaplane_ride","slide","summer_toboggan","teacup"],"audio_loop":["yes"],"balloon:type":["research"],"barrier":["armadillo","avalanche_protection","bar","barricade","barrier_board","berm","coupure","debris","delineator_kerb","delineators","dug-in_tyres","floating_boom","haha","horse_jump","lych_gate","parking_bumper","parking_lock","planter","sliding_beam","sliding_gate","steeplechase_jump","step","sump_buster","tank_trap","tyres","wedge","wicket_gate","yes"],"basin":["aeration","footbath","settling","water_regeneration"],"bath:type":["foot_bath","hammam","hot_spring","lake","onsen","pool","river","sea","sento","thermal"],"bay":["fjord"],"beacon:type":["DME","IM","MM","NDB","OM","TACAN","VORTAC","bluetooth"],"beauty":["spa","tanning"],"bench":["wave_lounger"],"bicycle":["dismount","optional_sidepath"],"bicycle_rental":["dropoff_point"],"board_type":["company"],"books":["comic"],"border_type":["nation"],"boules":["bocce","boule_de_fort","breton"],"boundary":["administrative_cooperation","census","civil","disputed","exclave","historic","limited_traffic_zone","local_authority","lot","low_emission_zone","marker","place","public_transport","regional_park","safety_region","statistical","timezone","urban","water_protection_area"],"brand":["Eroski","Harley-Davidson","KTM","Louis_Motorrad","Moto_Guzzi","Polo_Motorrad","Spar","Triumph","Zero"],"bridge":["log_bridge"],"bridge:movable":["retractable","submersible","tilt"],"bridge:structure":["clapper","humpback","simple-suspension"],"bridge:support":["pylon"],"building":["agricultural","barracks","bath","beach_hut","bell_tower","brewery","bridge","bus_station","carport","castle","central_office","changing_rooms","cinema","civic","clinic","convent","data_center","data_centre","demountable","digester","dog_house","dovecote","factory","font","fort","funeral_hall","garbage_shed","gatehouse","gauge_house","gazebo","ger","goat_shed","government","government_office","ground_station","guardhouse","guest_house","hall_of_residence","hostel","hotel","houseboat","kingdom_hall","kiosk","library","lighthouse","livestock","mall","marketplace","marquee","military","mink_shed","mobile_home","monastery","mortuary","museum","outbuilding","pagoda","palace","pavilion","police","porch","presbytery","prison","railway","religious","riding_hall","roundhouse","ruins","sanitary","sauna","semi","sheepfold","shepherd_shelter","ship","show_house","shrine","silo","smithy","sports_hall","stadium","sty","swimming_pool","tech_cab","tent","terraced_house","tower","townhall","transportation","tree_house","triumphal_arch","trullo","venta","villa","water_tower","wayside_shrine","wine_cellar","workshop"],"building:part":["balcony","column","porch","steps"],"building:prefabricated":["yes"],"building:use":["stable","warehouse"],"bunker_type":["bomb_shelter","gun_emplacement","hardened_aircraft_shelter","personnel_shelter","technical"],"bus":["minibus","no","school"],"busbar":["flexible","rigid"],"by_night":["only"],"cafe":["board_game","time-cafe","time_cafe","yes"],"camra":["yes"],"canoe":["portage"],"cargo":["container","liquid_bulk"],"castle_type":["castrum","kremlin","shiro"],"caterer":["dark_kitchen"],"cemetery":["cillin","war_cemetery","wood"],"channelised":["yes"],"climbing":["area","crag","route"],"clothes":["babies","children","fashion","luxury","motorcycle","sports","swimwear","unisex","vintage","wedding","women","women;men","women;men;children","workwear"],"club":["art","automobile","baduk","bicycle","board_games","card_games","chess","computer","fan","fishing","freemasonry","golf","hunting","linux","model_railway","motorcycle","music","nudism","sailing","scuba_diving","social","student","tourism","veterans","youth","youth_movement"],"coastline":["bogus"],"coastline:survey_quality":["complete"],"collection_times:signed":["no"],"commons":["lets"],"community_centre":["club_home","community_hall","family_centre","meeting_room"],"community_centre:for":["entrepreneur"],"company":["aerospace","agrarian","balloon","construction","distribution","internet_shop","it","logistics","robot","software","software_development","transport"],"compensator":["petersen_coil","voltage_regulator"],"construction":["minor","office"],"consulate":["residence"],"content":["hot_water","rainwater"],"cooling:method":["air_cooling","dry_cooling","mechanical_draft","natural_draft"],"craft":["agricultural_engines","atelier","bag_repair","bakery","basket_maker","beekeeper","boatbuilder","bookbinder","builder","cabinet_maker","candlemaker","car_painter","carpet_cleaner","carpet_layer","cheese","chimney_sweeper","cleaning","clockmaker","confectionery","cooper","dental_technician","distillery","door_construction","dressmaker","elevator","embroiderer","engraver","excavation","fence_maker","floorer","glassblower","goldsmith","gunsmith","hvac","insulation","interior_decorator","interior_work","jeweller","key_cutter","laboratory","lapidary","leather","locksmith","luthier","mint","musical_instrument","oil_mill","optician","organ_builder","parquet_layer","paver","pest_control","photographic_laboratory","photovoltaic","piano_tuner","plasterer","printer","printmaker","restoration","rigger","roofer","saddler","sailmaker","scaffolder","sculptor","signmaker","stand_builder","stove_fitter","sun_protection","tatami","tiler","tinsmith","toolmaker","turner","watchmaker","water_well_drilling","weaver","welder"],"crane:type":["floor-mounted_crane","gantry_crane","portal_crane","tower_crane","travel_lift"],"crematorium":["pet"],"crop":["asparagus","barley","cassava","cereal","coffee","fast_growing_wood","flowers","grape","grass","hay","hop","maize","oats","rape","rye","strawberry","sunflower","tea","wheat"],"crossing":["informal"],"cuisine":["acai","bagel","barbecue","beef_bowl","brazilian","bubble_tea","cake","couscous","crepe","curry","dessert","dim_sum","donut","dumpling","dumplings","empanada","friture","frozen_yogurt","grill","gyros","hot_dog","hot_pot","hotpot","jause","kebab","noodle","palestinian","pancake","pasta","pastry","pie_and_mash","ramen","rice_noodle","sausage","soup","steak","strudel","surinamese","syrian","tapas","tea","tea_shop","teahouse","tex-mex","ukrainian","vietnamese","waffle","wings"],"culvert":["arch","inverted_siphon"],"cycle_network":["BE-BRU:cycle_highway","BE-VLG:cycle_highway","DE:BW:RadNETZ","DE:HH:Radnetz_Hamburg","JP:prefectural","US","US:CA:SF","US:US","US:USA"],"cycleway":["link","share_busway","sidepath","sidewalk"],"cycleway:foot":["designated","no"],"cycleway:left:oneway":["no"],"cycleway:right:oneway":["no","yes"],"cycling":["pump_track"],"damage:event":["war"],"damage:type":["explosion"],"defensive":["bergfried","donjon"],"delivery":["shipment"],"dennert_fir_tree":["yes"],"denomination":["iglesia_filipina_independiente","jehovahs_witness","jodo_shinshu","jodo_shu","la_luz_del_mundo","mormon","nichiren","reformed","shingon_shu","soto","tiantai","ukrainian_orthodox"],"denotation":["windbreak"],"designation":["bathing_water","byway_open_to_all_traffic","civil_parish","common","core_path","public_bridleway","public_footpath","quiet_lane","restricted_byway","shared_path"],"diet:kosher":["only","yes"],"diet:meat":["yes"],"disused:amenity":["fountain"],"disused:landuse":["landfill","quarry"],"dock":["drydock","floating"],"dog":["designated","outside","unleashed","yes"],"door":["no"],"drink":["beer"],"dual_carriageway":["no"],"education":["exercise_area"],"electronics_repair":["phone"],"embankment":["dyke"],"emergency":["access_point","control_centre","disaster_help_point","fire_equipment","fire_flapper","fire_hose","fire_water_pond","first_aid","first_aid_kit","helisign","key_depot","ladder_site","landing_site","life_ring","marine_refuge","mountain_rescue","rescue_box","rescue_buoy","slipway","suction_point","throw_bag"],"enforcement":["average_speed","maxspeed"],"entrance":["cellar","entrance","no","secondary"],"faculty":["engineering"],"fast_food":["cafeteria"],"fence_type":["wood_bollard"],"fire_path":["yes"],"fitness_station":["horizontal_bar","sit-up","stepper"],"fixme":["name","position_estimated","verify_name"],"flag:type":["advertising","athletic"],"flood_mark":["painting","plaque"],"flood_prone":["yes"],"foot":["destination"],"footway":["alley","link","path","residential","service"],"fortification_type":["dun","limes","motte","ring_ditch","sconce"],"fountain":["bottle_refill","bubbler","decorative","drinking","roman_wolf","splash_pad","stone_block","toret","viktorija_zdenac","wallace"],"generator:source":["battery","electricity"],"generator:type":["PWR","boiler","cross-flow_turbine","francis_turbine","heat_pump","hydrodynamic_screw","kaplan_turbine","lithium_ion","pelton_turbine","steam_generator","water_wheel"],"genus":["Acer","Platanus","Quercus","Tilia"],"genus:de":["Linde"],"geological":["columnar_jointing","cone","dyke","fault","fold","giants_kettle","glacial_erratic","hoodoo","inselberg","limestone_pavement","meteor_crater","monocline","moraine","outcrop","pingo","rock_glacier","sinkhole","tor","unconformity","volcanic_caldera_rim","volcanic_lava_field","volcanic_lava_flow","volcanic_lava_tube","volcanic_vent"],"glacier:type":["mountain","rock"],"golf":["cartpath","penalty_area"],"golf:course":["driving_range","pitch_and_putt"],"government":["aerospace","archive","audit","bailiff","border_control","building_control","cadaster","chamber_of_commerce","culture","customs","data_protection","education","emergency","healthcare","heritage","it","justice","legislative","parliament","social_security","social_services","statistics","watercourse_management","youth_welfare_department"],"guest_house":["agritourism","albergue","bed_and_breakfast","student_accommodation"],"harassment_prevention":["ask_angela"],"hazard":["archery_range","avalanche","biohazard","cliff","collapse","damaged_road","electricity","emergency_vehicles","falling_trees","flooding","fog","frail_pedestrians","ground_clearance","hole","illegal_crossing","isolated_road_extreme_weather","leeches","pedestrian_crossing","road_narrows","roadworks","roundabout","steam","tide","traffic_signals","washout"],"hazard_prone":["yes"],"hazmat:water":["permissive"],"health_facility:type":["office"],"healthcare":["birthing_centre","centre","community_health_worker","counselling","dialysis","health_post","hospice","nurse","nutrition_counselling","pharmacy","rehabilitation","yes"],"healthcare:speciality":["equine-assisted","family_planning","implantology","rehabilitation","urgent"],"hedge":["hedge_bank"],"heritage:operator":["kons","mhs","nrhp"],"highway":["no","piste","priority","proposed","speed_display","traffic_mirror","traffic_sign","turntable","via_ferrata"],"historic":["anchor","aqueduct","bullaun_stone","cannon","caravanserai","castle_wall","cattle_crush","cemetery","epigraph","farm","flood_mark","folly","gallows","heritage","high_cross","highwater_mark","hollow_way","house","lavoir","lime_kiln","locomotive","market_cross","martello_tower","mass_path","mine_adit","missile","monastery","mosque","optical_telegraph","pillory","police_call_box","pound","railway","railway_car","railway_station","rampart","road","round_tower","ruins","rune_stone","shieling","ship","smithy","stecak","tank","temple","tower","tree_shrine","vehicle","warehouse","watermill"],"horse":["dismount"],"house":["bungalow","detached","link-detached","maisonette","semi-detached","terrace","terraced"],"hov":["yes"],"ice_skates":["kluning"],"indoor":["area","column","corridor","door","room","wall","yes"],"industrial":["aerospace","aluminium_smelting","asphalt_plant","auto_wrecker","automotive_parts","bakery","brewery","communication","concrete_plant","construction_company","data_centre","distributor","electrical","furniture","gas_plant","gas_storage","grinding_mill","heating_station","ice_factory","logistics","machine_shop","metal_processing","mine","oil_mill","petroleum_terminal","plastic_processing","port","recycling","refinery","refrigerated_warehouse","rice_mill","sawmill","shipyard","slaughterhouse","steel_mill","storage","trucking"],"informal":["no"],"information":["audioguide","helpdesk","post","route_marker","sign","stele","tactile_map","tactile_model","trail_blaze","visitor_centre"],"insurance":["health"],"irrigation":["yes"],"junction":["controlled","jughandle","spui","uncontrolled"],"landcover":["flowerbed","grass","gravel","greenery","mostly_rock","trees"],"landform":["dune_system"],"landuse":["animal_keeping","apiary","canal","civic_admin","culture","fairground","forestry","governmental","greenery","harbour","healthcare","highway","horticulture","institutional","logging","paddy","peat_cutting","recreation_ground","reservoir_watershed","static_caravan","traffic_island","tree_pit","winter_sports"],"lawyer":["bailiff","notary"],"leaf_type":["palm"],"leisure":["axe_throwing","barefoot","bathing_place","batting_cage","beach","bingo_hall","climbing","common","festival_grounds","fox_covert","hammock","high_ropes_course","hot_tub","indoor_play","music_venue","paddling_pool","parklet","practice_pitch","rage_room","recreation_ground","schoolyard","shooting_ground","soccer_golf","social_club","summer_camp","sunbathing","swimming_platform","tanning_salon","trampoline_park","village_swing","wellness","wildlife_hide"],"level_crossing":["uncontrolled"],"line":["substation"],"location":["cave","indoor","outdoor","overhead","platform","rooftop"],"lottery":["yes"],"maintenance":["gritting"],"man_made":["advertising","aircraft","animal_ramp","animal_trap","archimedes_screw","avalanche_protection","basin","beach_pole","beacon","bell","bioswale","bird_feeder","birdhouse","borehole","cellar_entrance","chiller","clarifier","clothes_line","column","compass_rose","composting_plant","compressor","cooling_tower","courtyard","crane_rail","culvert","desalination_plant","dovecote","drinking_fountain","duck_decoy","eruv_lechi","eruv_string","excavation","ferry_cable","flare","floating_storage","flowerbed","foundation","frost_fan","fuel_column","fuel_pump","gas_dehydrator","grave","guy_wire","heap","insect_hotel","lamp","maypole","milk_churn_stand","mountaineers_mailbox","offshore_platform","oil_gas_separator","outfall","oxidation_ditch","pavement_light","planter","platform","process_tank","quay","reinforced_slope","ruins","satellite_dish","school_sentry","septic_tank","sewer_vent","sheepfold","sign","ski_jump","slurry_basin","slurry_tank","snow_cannon","soccer_goal","spring_box","stele","stecak","telephone_box","tell","threshing_floor","tomb","tunnel","urine_deflector","warehouse","wildlife_crossing","windpump"],"manhole":["drain","sewer","telecom"],"map_type":["scheme","street","topo","toposcope"],"marker":["borderpole","borderstone","paddle"],"material":["tufa"],"maxheight":["default"],"maxspeed":["implicit","none"],"maxspeed:type":["AU:rural","AU:urban","CA-AB:rural","CA-AB:urban","CA-ON:rural","CA-ON:urban","CA:urban","GB:motorway","GB:nsl_dual","GB:nsl_restricted","GB:nsl_single","GB:zone20","GB:zone40","NL:living_street","NL:motorroad","NL:motorway","NL:rural","NL:urban","PL:rural","PL:urban"],"meadow":["paddock","pasture"],"medical_system:western":["yes"],"megalith_type":["alignment","chamber","cist","gallery_grave","long_barrow","nuraghe","passage_grave","ring_cairn","round_barrow","stone_circle","stone_ship","tholos","well"],"memorial":["bench","cenotaph","ghost_bike","immortality_tower","peace_pole","stolperschwelle","storm_surge_post","vehicle"],"message":["funding"],"military":["academy","ammunition","barracks","checkpoint","depot","launchpad","nuclear_explosion_site","obstacle_course","office","school","training_area","trench"],"monument":["statue"],"mooring":["commercial","cruise","ferry","guest"],"mtb:type":["downhill"],"museum":["aerospace","agriculture","archaeological","art","automobile","aviation","children","history","local","military","motorcycle","natural_history","nature","open_air","person","railway","science","technology","transport"],"name:signed":["no"],"natural":["anthill","arch","atoll","bare_ground","beaver_dam","birds_nest","blockfield","blowhole","crevasse","desert","dune","esker","flowers","geothermal","geothermal_area","geothermal_field","gorge","grass","gully","hill","landform","landslide","massif","mountain_range","mud","plant","shrub","shrubbery","termite_mound","tree_group","tundra","wallow"],"navigationaid":["reil","rel","rgl","rwc","rwe","rwt","tdz","txc","txe","vasi"],"network":["AuenBlicke","CA:ON:York","Flinkster","JP:national","JP:prefectural","KR:national","MA:A","MA:RN","MA:RP","MA:RR","NL:A","NL:N","NL:R:IJmuiden","NL:R:Ommen","NL:R:Schouwen","NL:R:Sluis","NL:R:Spaarnwoude","NL:R:Voorthuizen","NL:S:Amsterdam","NL:S:Den_Haag","NL:S:Heerlen","NL:S:Nijmegen","NL:S:Parkstad","NL:S:Rotterdam","NL:S:Zaanstad","NL:binnenstedelijke_ring","NL:ring","SE:LS","SE:LV","SE:RV","US:ADHS","US:KY:AA","US:KY:Parkway","US:MD","US:NY:Orange","US:NY:Parkway","US:NY:Parkway:LI","US:NY:Parkway:NYC","US:OH:CAR","US:PIPC","US:TX:Van_Zandt","US:TX:Wood","US:US:Historic","US:WV","US:WV:HARP","US:WV:Mason","US:WV:McDowell","US:WV:Mercer","VE:R:PO","cambio_stadtmobil","e-road","e-waterway","lhn","lpn","rhn","rin","rmn","rpn"],"nobrand":["yes"],"noname":["no"],"nonsquare":["yes"],"observatory:type":["astronomical","gravitational","meteorological"],"obstacle:wheelchair":["yes"],"office":["accountant","advertising_agency","airline","architect","archive","bail_bond_agent","call_centre","camping","chamber","charity","construction_company","consulting","cooperative","courier","coworking","engineer","event_management","forestry","foundation","geodesist","gongo","graphic_design","guide","harbour_master","healthcare","highway","information","insurance_adjuster","interior_design","international_organization","it","logistics","lost_property","medical","moving_company","natural_gas_utility","newspaper","ngo","notary","parish","personal_service","pest_control","politician","private_investigator","property_management","publisher","quango","reception","rental","research","school","security","surveyor","tax_advisor","telecommunication","therapist","translator","transport","travel_agent","tutoring","union","university","visa","wedding_planner","yes"],"on_demand":["yes"],"oneway:bus":["no"],"oneway:motorcycle":["no"],"oneway:psv":["no"],"opening_hours":["closed"],"operator":["Agentschap_voor_Natuur_en_Bos","Bundesrepublik_Deutschland","Flinkster","GRDF","Havenbedrijf_Rotterdam_N.V.","Koninkrijk_der_Nederlanden","La_Banque_Postale","La_Poste","Land_Aruba","Land_Curacao","Land_Sint_Maarten","Staat_der_Nederlanden","WOSM","book-n-drive","independent","teilAuto"],"organ":["yes"],"outdoor_seating":["patio","terrace"],"owner":["Staat_der_Nederlanden"],"ownership":["community"],"park_ride":["hov"],"parking_space":["bus","charging","parent","pregnant","veteran"],"passenger":["suburban","yes"],"path":["climbing_access","crossing","desire","link","mtb","sidewalk","trail"],"pharmacy":["yes"],"physically_present":["no"],"piste:takeoff":["yes"],"piste:type":["fatbike","hike","ice_skate","ski_jump","sled","sleigh","snowmobile"],"place":["allotments","borough","city_block","continent","county","district","farm","municipality","plot","polder","province","region","sea","state","subcounty","subdistrict"],"place_of_worship":["chapel","lourdes_grotto","musalla","sacred_tree"],"placement":["right_of:1","transition"],"plant:method":["barrage","gasification","stream"],"plant:source":["battery","diesel","flywheel","tidal"],"plant:type":["boiler","gas_turbine","lithium_ion","reciprocating_engine","steam_turbine"],"playground":["baby_swing","basketswing","bridge","climbingwall","funnel_ball","horizontal_bar","map","maze","rope_swing","sledding","swing","tire_swing","tunnel_tube","youth_bench"],"pole":["flag","totem","traffic_sign"],"police":["academy","helicopter_unit"],"political_division":["NL:kamerkieskring","NL:statenkieskring","TR:TBMM","congressional_district","euro_const","linguistic_community"],"port":["cargo","fishing","roro"],"power":["insulator","inverter","outlet","terminal"],"prison_camp":["concentration_camp"],"private":["employees","exceptional_permit","members","military","residents","students"],"product":["beer","bricks","concrete","electronics","food","furniture","machinery","packaging","rice","steel","sugar"],"protect_class":["21","22"],"protected_area":["conservation","recreation","wildlife"],"protection_title":["Bien_integrante_del_patrimonio_cultural_de_Castilla-La_Mancha"],"public_transport":["entrance","fare_zone","platform_edge","platform_section_sign","pole"],"railway":["border","crossing_box","crossing_controller","derail","hirail_access","hump_yard","junction","museum","owner_change","platform_edge","platform_marker","platform_section","preserved","rail_brake","razed","roundhouse","service_station","spur_junction","tram_level_crossing","traverser","ventilation_shaft","wash","water_crane","water_tower","workshop","yard"],"railway:electricity":["joint","power_supply"],"railway:electricity:jumpering":["bridged","closed","no","possible"],"railway:radio":["gsm-r"],"railway:signal:distant:states":["FR:(A)","FR:(R)","FR:(R)+(A)","FR:(R)+A","FR:A","FR:D","FR:R","FR:R+(A)","FR:R+A","FR:VL"],"railway:signal:main:states":["FR:(A)","FR:(R)","FR:(R)+(A)","FR:(R)+A","FR:A","FR:R","FR:R+(A)","FR:R+A","FR:VL"],"railway:signal_box":["track_diagram"],"reclaimed":["yes"],"recreation_ground":["showground"],"religion":["pagan"],"removed:power":["line"],"rental":["boat","book","clothes","event","ski","skip","trailer"],"repair":["assisted_self_service","yes"],"request_stop":["yes"],"research":["aerospace"],"residential":["block","detached","duplex","halting_site","irregular_settlement","single_family","terrace","trailer_park","university"],"resource":["aggregate","coal","gravel","sand"],"restriction":["no_entry","no_exit","no_right_turn_on_red"],"restriction:bicycle":["stop"],"roller_coaster":["station","support"],"roof:shape":["apse_gabled","equal_mansard","half-dome","half-hipped","hipped-and-gabled","many","parabolic","saltbox"],"room":["classroom"],"roundabout":["turbo"],"route":["atv","canoe","detour","emergency_access","fitness_trail","historic","horse","inline_skates","light_rail","monorail","motorboat","pipeline","portage","railway","running","share_taxi","ski","snowmobile","tracks","train","transhumance","trolleybus","via_ferrata","waterway","wheelchair"],"rugby":["union","walking"],"ruins":["temple"],"school:gender":["female","male","mixed","separated"],"seamark:beacon_lateral:category":["preferred_channel_port","preferred_channel_starboard"],"seamark:buoy_lateral:colour":["green","red"],"seamark:buoy_lateral:shape":["conical"],"seamark:cable_overhead:category":["power","transmission"],"seamark:cable_submarine:category":["power"],"seamark:distance_mark:units":["hectometres","kilometres"],"seamark:harbour:category":["fishing"],"seamark:light:category":["floodlight"],"seamark:notice:category":["ferry_independent","ferry_non_independent"],"seamark:sea_area:category":["narrows","shoal"],"seamark:signal_station_traffic:category":["lock"],"seamark:small_craft_facility:category":["boat_hoist","boatyard","chandler","fuel_station","launderette","nautical_club","pump-out","showers","slipway","toilets","visitor_berth"],"seamark:type":["beacon_safe_water","berth","bunker_station","buoy_installation","buoy_isolated_danger","buoy_safe_water","cable_area","cable_overhead","cable_submarine","calling-in_point","causeway","checkpoint","coastguard_station","communication_area","dredged_area","dry_dock","dumping_ground","exceptional_structure","fairway","harbour","hulk","light","lock_basin","obstruction","pile","pipeline_submarine","platform","radar_reflector","radar_station","radio_station","sea_area","seaplane_landing_area","separation_boundary","separation_lane","separation_line","separation_zone","signal_station_traffic","signal_station_warning","virtual_aton","waterway_gauge","wreck"],"seamark:wreck:category":["dangerous","hull_showing","non-dangerous"],"service":["aircraft_control","fuel","irrigation","slipway"],"sett:style":["portuguese"],"shelter_type":["Wetterpilz","bomb_shelter","changing_rooms","field_shelter","pergola","public_transport","rock_shelter","sun_shelter","wetterpilz"],"shop":["3d_printing","atv","baking_supplies","balloon","bbq","beekeeping","boat","boat_parts","boat_repair","brewing_supplies","building_materials","business_machines","calendar","camera","camp","candles","canoe_hire","catalogue","chandler","christmas","cleaning_supplies","collector","condo","dentures","doormat","doors","eggs","energy","equestrian","esoteric","fan","fashion","flooring","food","frame","free_flying","frozen_food","fuel","gaming_machines","garden_furniture","garden_machinery","glaziery","gold_buyer","golf","golf_cart","grinding_mill","grocery","groundskeeping","growshop","haberdashery","hairdresser_supply","headshop","health_food","herbalist","honey","hookah","household_linen","hunting","hvac","hydroponics","ice_cream","insurance","jetski","junk_yard","kitchenware","knives","leatherworking","lighting","magic","maps","military_surplus","mobile_home","mobile_phone_accessories","mobility_scooter","model","money_lender","motorcycle_parts","motorsports","new_age","no","nuts","outpost","packaging","pasta","peanut_butter","pest_control","photo_studio","plant_hire","power_tools","printer_ink","printing","promotional_products","psychic","pyrotechnics","radiotechnics","religion","rental","repair","rice","robot","rope","safety_equipment","sauna","scooter","security","sewing","shed","ship_chandler","shopping_centre","skate","ski","smartshop","snack","spare_parts","spices","stairs","sunglasses","surf","tailor","telecommunication","tiles","tool_hire","tools","tractor","trailer","trophy","truck","truck_repair","vacant","video_restore","wallpaper","water","water_sports","weapons","weaver","weighing_scales","wellness","wigs","window_blind","window_tinting","windows","wool","yes"],"signpost":["forestry_compartment"],"site":["piste","planet_trail","venue","wind_farm"],"social_facility":["clothing_bank","dairy_kitchen","equine_assisted_centre","hospice"],"source":["Bing","Google","HiRes_aerial_imagery","Mapillary","NAIP","bing","mapillary","survey"],"source:ele":["AMS","SRTM","barometric"],"source:height":["estimated","estimation_levels","lidar","satellite_imagery","shadow","survey"],"source:maxspeed":["AT:city_limit30","RU:urban","implicit"],"source:name":["GNS"],"species":["Acer_platanoides","Quercus_robur","Tilia_cordata"],"sport":["8pin","9pin","aerobics","aikido","american_handball","axe_throwing","balle_pelote","bandy","barre","batting_cage","beachhandball","beachtennis","biathlon","billiards","bobsleigh","bodybuilding","bullfighting","calisthenics","canadian_football","canoe","canoe_polo","cliff_diving","climbing_adventure","cockfighting","cricket_nets","croquet","crossfit","curling","cycle_ball","cycle_polo","dance","darts","disc_golf","diving","dodgeball","dog_agility","dog_racing","fencing","fistball","five-a-side","floorball","four_square","gaga","gateball","gliding","hapkido","hiking","hopscotch","ice_stock","jetsprint","judo","karate","kick_scooter","kickball","kickboxing","kitesurfing","korfball","krachtbal","lacrosse","laser_tag","long_jump","longbowl","martial_arts","mind_body_interventions","miniature_golf","mtb","nine_mens_morris","obstacle_course","orienteering","paddle_tennis","paddleball","paddleboard","parachuting","parkour","pelota","pesapallo","pickleball","pilates","pole_dance","polo","powerlifting","racquet","rodeo","roller_hockey","roller_skating","rowing","rugby","rugby_league","rugby_union","running","russian_skittles","sailing","shot-put","shuffleboard","ski_jumping","skiing","snooker","snorkeling","speedway","squash","streetball","sumo","surfing","table_soccer","taekwondo","tamburello","teqball","tetherball","toboggan","touch_football","trampoline","trugo","ultimate","ultralight_aviation","wakeboarding","walking","water_polo","water_ski","water_sports","weightlifting","windsurfing","wrestling"],"spring:type":["hot"],"state":["alternate"],"station":["funicular"],"statue":["animal","buddha","equestrian","virgin"],"stecak":["nishan_necropolis","stecak_necropolis"],"street_cabinet":["postal_service"],"street_vendor":["yes"],"studio":["audio","television","video"],"submarine":["yes"],"subsea":["bank"],"substation":["generation"],"summit:cross":["yes"],"surface":["acrylic","bitmac","carpet","chipseal","decoturf","earth","fibre_reinforced_polymer_grate","glass","hard","hard_court","linoleum","paving_stones:lanes","plastic","sandstone","shells","snow","soil","tarmac","tiles"],"surveillance:type":["gunshot_detector"],"swimming_pool":["yes"],"symbol":["Knafelceva_markacija"],"tactile_paving":["partial"],"tank_trap":["czech_hedgehog"],"taxi_vehicle":["motorcycle"],"taxon":["Arecaceae","Eucalypteae"],"taxon:family":["Arecaceae"],"telecom":["cross-connect","data_center","line","remote_terminal"],"telescope:type":["optical","radio"],"temporary":["yes"],"theatre:genre":["philharmonic"],"theatre:type":["amphi","concert_hall","open_air","opera_house"],"theme":["cat","irish"],"tickets:public_transport":["yes"],"tickets:public_transport_subscription":["yes"],"toilets:wash":["no","shower","water_dipper"],"tomb":["table","turbe"],"tourism":["hunting_lodge","spa_resort","trail_riding_rest","trail_riding_station","wine_cellar","yes"],"tower:construction":["guyed_lattice","guyed_tube"],"tower:type":["anchor","bridge","church","diving","firefighter_training","hose","intake","launch_tower","lightning_protection","lightning_rod","minaret","monitoring","monument","popinjay","siren","water_tower"],"townhall:type":["barangay","village"],"trade":["agricultural_supplies","building_supplies","lumber","metal","timber"],"traffic_calming":["double_dip","markings","painted_island","painted_table"],"traffic_sign":["AT:52.1","AT:52.17a-a","AT:53.26a","AT:53.9c","AT:FKV_1.9","AT:WVO_F.1","DE:105-10","DE:105-20","DE:255","DE:274.1","DE:274.1-20","DE:350","DE:350-10","DE:350-20","DE:350-40","DE:386.3","DE:437","FR:B22a","FR:C113","FR:C115","GB:610","PL:A-1","PL:A-2","PL:D-42","PL:D-43","US:D3-1","US:R1-1","US:R1-1;US:R1-3P","US:R1-1;US:W4-4P","US:R1-2","US:R4-7","US:R5-1","US:R5-1a","US:R6-2R","US:S1-1","US:S1-1;US:W16-7PL","US:W1-7","US:W10-1","US:W10-1,US:W10-9P","US:W10-5,US:W10-5P","US:W11-2","US:W11-3","US:W12-2","US:W12-2a","US:W14-1","US:W14-2","US:W3-1","US:W3-3","city_limit","speedometer_test"],"traffic_signals":["blinker","continuous_green","emergency","ramp_meter","tram_priority"],"training":["art","aviation","computer","driving","language","music","sport"],"transformer":["current","potential"],"trees":["almond_trees","banana_plants","blueberry_plants","cacao_trees","coconut_palms","coffea_plants","date_palms","durian_trees","hop_plants","mango_trees","oil_palms","orange_trees","papaya_trees","pineapple_plants","rubber_trees","tea_plants"],"tunnel":["canal"],"two_sided":["yes"],"usage":["irrigation","leisure","link","military","science","test","transportation"],"utility":["eruv","loudspeaker"],"valley":["balka"],"vehicle":["agricultural;forestry"],"vending":["SIM_cards","admission_tickets","animal_feed","art","bicycle_tube","books","bottle_return","bread","candles","chemist","chewing_gums","coffee","coin_rolls","contact_lenses","e-cigarettes","eggs","electronics","elongated_coin","feminine_hygiene","first_aid","fishing_bait","fishing_tackle","flowers","food","fuel","gas","honey","ice_cream","ice_cubes","ink_cartridges","laundry_detergent","lottery","milk","movies","newspapers","pet_food","pizza","public_transport_plans","raw_milk","rice_polishing","sex_toys","sweets","syringes","telephone_vouchers","toll","toys","umbrellas","water"],"vending_machine":["fuel"],"via_ferrata":["start"],"viewpoint":["birdwatching"],"volcano:status":["active","dormant"],"volcano:type":["caldera","lava_dome","maar","scoria","shield","stratovolcano"],"voltage":["0"],"wall":["no","pise","seawall","stone_wall","tire_barrier","yes"],"waste":["ash","cigarettes","drugs","flags","oil","organic","pizza_box","recycling","rubble","trash"],"water":["fish_pass","fishpond","harbour","kolk","mere","moat","rapids","stream_pool"],"water_source":["tube_well","water_works"],"water_works":["desalination"],"waterway":["access_point","boat_lift","boatyard","canoe_pass","confluence","debris_screen","derelict_canal","drainage_channel","drystream","fairway","floating_barrier","floodgate","flow_control","flowline","fuel","link","sanitary_dump_station","security_lock","stream_end","turning_point","water_point"],"wetland":["dambo","mud"],"worship":["stations_of_the_cross"],"zone":["parking"],"zone:traffic":["DE:motorway"],"zoo":["aviary","birds","butterfly","enclosure","falconry","reptile","safari_park","wildlife_park"]};
 
@@ -356,15 +395,18 @@ const S = {
   apiKey: '',
   model: 'gpt-4o',
   map: null,
-  queries: [],      // [{name, description, overpassQL, tags, elements, layerGroup, elementLayers, visible}]
+  queries: [],      // [{name, description, overpassQL, tags, elements, layerGroup, elementLayers, areaFallbacks, visible}]
   selectedIds: new Set(),
   brush: { active: false, start: null, overlayEl: null, rectLayer: null },
+  savedSearches: [], // [{id, question, queries, savedAt, hidden}]
+  currentQuestion: '',
 };
 
 /* ── Init ───────────────────────────────────────────────────────── */
 function init() {
   S.apiKey = localStorage.getItem('openai_api_key') || '';
   S.model  = localStorage.getItem('openai_model')   || 'gpt-4o';
+  try { S.savedSearches = JSON.parse(localStorage.getItem('saved_searches') || '[]'); } catch(e) { S.savedSearches = []; console.warn('Could not parse saved searches from localStorage:', e); }
   buildExamples();
   bindEvents();
   try {
@@ -374,6 +416,8 @@ function init() {
     console.error('Map init failed:', e);
     setStatus('Map unavailable — check network');
   }
+  renderSavedSearches();
+  loadShare();
 }
 
 function initMap() {
@@ -383,6 +427,7 @@ function initMap() {
     maxZoom: 19,
   }).addTo(S.map);
   S.map.on('moveend zoomend', updateStatusBounds);
+  S.map.on('zoomend', updateAreaDots);
 }
 
 function buildExamples() {
@@ -416,6 +461,10 @@ function bindEvents() {
 
   // Export
   document.getElementById('exportGpxBtn').addEventListener('click', exportGPX);
+  document.getElementById('exportCsvBtn').addEventListener('click', exportCSV);
+
+  // Share
+  document.getElementById('shareBtn').addEventListener('click', shareQuery);
 }
 
 /* ── Settings ───────────────────────────────────────────────────── */
@@ -453,6 +502,10 @@ async function handleGenerate() {
   const question = document.getElementById('questionInput').value.trim();
   if (!question) return;
   if (!S.apiKey) { showError('Please set your OpenAI API key in Settings.'); return; }
+
+  // Hide examples after first search
+  document.getElementById('examplesSection').style.display = 'none';
+  S.currentQuestion = question;
 
   // Reset
   clearAllLayers();
@@ -734,6 +787,7 @@ function renderOnMap(idx, elements) {
   const color   = COLORS[idx % COLORS.length];
   const lg      = L.layerGroup().addTo(S.map);
   const elLayers = new Map();
+  const areaFallbacks = [];
 
   // Limit rendering for performance; excess elements are still listed in the results panel
   const MAX_RENDER = 1000;
@@ -751,9 +805,18 @@ function renderOnMap(idx, elements) {
       const firstPt = pts[0];
       const lastPt  = pts[pts.length - 1];
       const closed  = pts.length > 2 && firstPt[0] === lastPt[0] && firstPt[1] === lastPt[1];
-      layer = closed && isAreaEl(el.tags)
-        ? L.polygon(pts,  polyStyle(color))
-        : L.polyline(pts, lineStyle(color));
+      if (closed && isAreaEl(el.tags)) {
+        layer = L.polygon(pts, polyStyle(color));
+        // Create a fallback dot shown when the polygon is too small to see
+        const center = layer.getBounds().getCenter();
+        const fallback = L.circleMarker([center.lat, center.lng], { ...nodeStyle(color), opacity: 0, fillOpacity: 0 });
+        fallback.bindPopup(buildPopup(el, name, color));
+        fallback.on('click', () => { toggleSel(eid); renderResultsList(); });
+        lg.addLayer(fallback);
+        areaFallbacks.push({ poly: layer, fallback, eid });
+      } else {
+        layer = L.polyline(pts, lineStyle(color));
+      }
     } else if (el.type === 'relation' && el.members) {
       const ways = el.members.filter(m => m.type === 'way' && m.geometry);
       if (ways.length) {
@@ -773,11 +836,50 @@ function renderOnMap(idx, elements) {
 
   S.queries[idx].layerGroup    = lg;
   S.queries[idx].elementLayers = elLayers;
+  S.queries[idx].areaFallbacks = areaFallbacks;
+
+  // Apply initial area-dot logic for the current zoom level
+  updateAreaDots();
 }
 
 function nodeStyle(c) { return { radius: STYLE.NODE_RADIUS, fillColor: c, color: '#fff', weight: STYLE.NODE_WEIGHT, fillOpacity: 0.85, opacity: 1 }; }
 function lineStyle(c) { return { color: c, weight: STYLE.LINE_WEIGHT, opacity: 0.8 }; }
 function polyStyle(c) { return { color: c, weight: 2, fillColor: c, fillOpacity: 0.18, opacity: 0.8 }; }
+
+/* ── Area dot fallback ──────────────────────────────────────────── */
+let _areaDotTimer = null;
+function updateAreaDots() {
+  // Debounce to avoid excessive recalculation during rapid zoom events
+  clearTimeout(_areaDotTimer);
+  _areaDotTimer = setTimeout(_applyAreaDots, 50);
+}
+function _applyAreaDots() {
+  if (!S.map) return;
+  S.queries.forEach((q, qi) => {
+    if (!q.areaFallbacks || !q.areaFallbacks.length) return;
+    const color = COLORS[qi % COLORS.length];
+    q.areaFallbacks.forEach(({ poly, fallback, eid }) => {
+      try {
+        const bounds = poly.getBounds();
+        if (!bounds.isValid()) return;
+        const sw = S.map.latLngToContainerPoint(bounds.getSouthWest());
+        const ne = S.map.latLngToContainerPoint(bounds.getNorthEast());
+        const pxSize = Math.max(Math.abs(ne.x - sw.x), Math.abs(ne.y - sw.y));
+        const tooSmall = pxSize < AREA_MIN_PX;
+        const sel = S.selectedIds.has(eid);
+        if (tooSmall) {
+          // Hide polygon, show dot
+          poly.setStyle({ opacity: 0, fillOpacity: 0 });
+          fallback.setStyle({ opacity: 1, fillOpacity: 0.85, fillColor: sel ? SEL_COLOR : color, color: sel ? color : '#fff', weight: sel ? STYLE.NODE_WEIGHT_SEL : STYLE.NODE_WEIGHT, radius: sel ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
+        } else {
+          // Show polygon, hide dot
+          poly.setStyle(sel ? { color: SEL_COLOR, weight: STYLE.LINE_WEIGHT_SEL, fillColor: color, fillOpacity: 0.25, opacity: 1 } : polyStyle(color));
+          fallback.setStyle({ opacity: 0, fillOpacity: 0 });
+        }
+      } catch(_) {}
+    });
+  });
+}
 
 function isAreaEl(tags = {}) {
   return ['building','landuse','leisure','natural','amenity','shop'].some(k => k in tags) || tags.area === 'yes';
@@ -902,13 +1004,15 @@ function syncLayerStyles() {
       const sel = S.selectedIds.has(eid);
       try {
         if (el.type === 'node') {
-          layer.setStyle({ fillColor: sel ? '#fff' : color, color: sel ? color : '#fff', weight: sel ? STYLE.NODE_WEIGHT_SEL : STYLE.NODE_WEIGHT, radius: sel ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
+          layer.setStyle({ fillColor: sel ? SEL_COLOR : color, color: sel ? color : '#fff', weight: sel ? STYLE.NODE_WEIGHT_SEL : STYLE.NODE_WEIGHT, radius: sel ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
         } else {
-          layer.setStyle({ color: sel ? '#fff' : color, weight: sel ? STYLE.LINE_WEIGHT_SEL : STYLE.LINE_WEIGHT, opacity: sel ? 1 : 0.8 });
+          layer.setStyle({ color: sel ? SEL_COLOR : color, weight: sel ? STYLE.LINE_WEIGHT_SEL : STYLE.LINE_WEIGHT, opacity: sel ? 1 : 0.8 });
         }
       } catch(_) {}
     });
   });
+  // Also update area fallback dots and polygon selection state
+  updateAreaDots();
 }
 
 /* ── Brush selection ────────────────────────────────────────────── */
@@ -994,6 +1098,7 @@ function renderQueryOutput(explanation, queries) {
         <div class="qv-dot" style="background:${color};"></div>
         <span class="qv-name">${esc(q.name)}</span>
         <span class="qv-vis" data-idx="${idx}" title="Toggle visibility">hide</span>
+        <span class="qv-save" data-idx="${idx}" title="Save this search to local storage" style="font-size:11px;padding:1px 5px;border-radius:2px;border:1px solid var(--border-mid);color:var(--text-1);background:var(--bg-3);cursor:pointer;line-height:1.4;">save</span>
         <span class="qv-count" data-idx="${idx}">-</span>
       </div>
       <div class="qv-body">
@@ -1005,9 +1110,18 @@ function renderQueryOutput(explanation, queries) {
     // Click header → activate + execute if needed
     div.querySelector('.qv-header').addEventListener('click', async e => {
       if (e.target.classList.contains('qv-vis')) return; // handled separately
+      if (e.target.classList.contains('qv-save')) return; // handled separately
       document.querySelectorAll('.query-variant').forEach(el => el.classList.remove('active'));
       div.classList.add('active');
       if (!S.queries[idx]?.elements?.length) await runQuery(idx);
+    });
+
+    // Save button
+    div.querySelector('.qv-save').addEventListener('click', e => {
+      e.stopPropagation();
+      saveSearch(S.currentQuestion, queries, idx);
+      e.target.textContent = 'saved!';
+      setTimeout(() => { e.target.textContent = 'save'; }, 1500);
     });
 
     // Visibility toggle
@@ -1101,7 +1215,170 @@ function exportGPX() {
   URL.revokeObjectURL(url);
 }
 
-/* ── Utility ────────────────────────────────────────────────────── */
+/* ── CSV export ─────────────────────────────────────────────────── */
+function exportCSV() {
+  const all = [];
+  S.queries.forEach((q, qi) => {
+    (q.elements || []).forEach(el => {
+      const eid = elId(el);
+      if (!S.selectedIds.size || S.selectedIds.has(eid)) all.push({ el, qname: q.name });
+    });
+  });
+
+  if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
+
+  // Collect all tag keys across all elements (union)
+  const tagKeys = new Set();
+  all.forEach(({ el }) => Object.keys(el.tags || {}).forEach(k => tagKeys.add(k)));
+  const sortedKeys = [...tagKeys].sort();
+
+  const escCsv = v => {
+    const s = String(v ?? '');
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const header = ['id', 'type', 'name', 'lat', 'lon', 'query', ...sortedKeys].map(escCsv).join(',');
+
+  const rows = all.map(({ el, qname }) => {
+    const tags = el.tags || {};
+    const lat = el.type === 'node' ? el.lat : (el.geometry ? el.geometry[0]?.lat : '') ?? '';
+    const lon = el.type === 'node' ? el.lon : (el.geometry ? el.geometry[0]?.lon : '') ?? '';
+    return [el.id, el.type, elName(el), lat, lon, qname, ...sortedKeys.map(k => tags[k] ?? '')].map(escCsv).join(',');
+  });
+
+  const csv = [header, ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `overpass-ai-${Date.now()}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ── Share URL ──────────────────────────────────────────────────── */
+function shareQuery() {
+  if (!S.queries.length) { showError('No query to share. Generate a query first.'); return; }
+  try {
+    const payload = {
+      question: S.currentQuestion,
+      queries: S.queries.map(q => ({ name: q.name, description: q.description, overpassQL: q.overpassQL, tags: q.tags })),
+    };
+    const encoded = btoa(encodeURIComponent(JSON.stringify(payload)).replace(/%([0-9A-F]{2})/gi, (_, p1) => String.fromCharCode(parseInt(p1, 16))));
+    const url = `${location.origin}${location.pathname}#share=${encoded}`;
+    navigator.clipboard.writeText(url).then(() => {
+      const btn = document.getElementById('shareBtn');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Share'; }, 2000);
+    }).catch(() => {
+      prompt('Copy this share link:', url);
+    });
+  } catch(e) {
+    showError(`Could not create share link: ${e.message}`);
+  }
+}
+
+function loadShare() {
+  const hash = location.hash;
+  if (!hash.startsWith('#share=')) return;
+  try {
+    const encoded = hash.slice('#share='.length);
+    const payload = JSON.parse(decodeURIComponent(atob(encoded).replace(/[\x80-\xff]/g, c => `%${c.charCodeAt(0).toString(16).padStart(2,'0')}`)));
+    if (!payload.queries?.length) return;
+    S.currentQuestion = payload.question || '';
+    document.getElementById('questionInput').value = S.currentQuestion;
+    document.getElementById('examplesSection').style.display = 'none';
+    clearAllLayers();
+    S.queries = payload.queries.map(q => ({ ...q, elements: [], layerGroup: null, elementLayers: new Map(), areaFallbacks: [], visible: true }));
+    renderQueryOutput(payload.explanation || '', payload.queries);
+    // Auto-run the first query
+    setTimeout(() => runQuery(0), 300);
+  } catch(e) {
+    console.warn('Could not load share link:', e);
+  }
+}
+
+/* ── Saved searches ─────────────────────────────────────────────── */
+function saveSearch(question, queries, variantIdx) {
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    question: question || '',
+    queries: queries.map(q => ({ name: q.name, description: q.description, overpassQL: q.overpassQL, tags: q.tags })),
+    activeVariant: variantIdx,
+    savedAt: new Date().toISOString(),
+    hidden: false,
+  };
+  S.savedSearches.unshift(entry);
+  persistSavedSearches();
+  renderSavedSearches();
+}
+
+function deleteSavedSearch(id) {
+  S.savedSearches = S.savedSearches.filter(s => s.id !== id);
+  persistSavedSearches();
+  renderSavedSearches();
+}
+
+function toggleSavedSearchHidden(id) {
+  const entry = S.savedSearches.find(s => s.id === id);
+  if (entry) { entry.hidden = !entry.hidden; persistSavedSearches(); renderSavedSearches(); }
+}
+
+function persistSavedSearches() {
+  localStorage.setItem('saved_searches', JSON.stringify(S.savedSearches));
+}
+
+function loadSavedSearch(id) {
+  const entry = S.savedSearches.find(s => s.id === id);
+  if (!entry) return;
+  S.currentQuestion = entry.question;
+  document.getElementById('questionInput').value = entry.question;
+  document.getElementById('examplesSection').style.display = 'none';
+  clearAllLayers();
+  S.queries = entry.queries.map(q => ({ ...q, elements: [], layerGroup: null, elementLayers: new Map(), areaFallbacks: [], visible: true }));
+  renderQueryOutput('', entry.queries);
+  setTimeout(() => runQuery(entry.activeVariant ?? 0), 100);
+}
+
+function renderSavedSearches() {
+  const container = document.getElementById('savedList');
+  const section   = document.getElementById('savedSection');
+  if (!container) return;
+
+  const visible = S.savedSearches.filter(s => !s.hidden);
+  const hidden  = S.savedSearches.filter(s => s.hidden);
+
+  // Show section only when there are saved searches
+  section.style.display = S.savedSearches.length ? 'block' : 'none';
+
+  container.innerHTML = '';
+
+  if (!S.savedSearches.length) return;
+
+  S.savedSearches.forEach(entry => {
+    const date = new Date(entry.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const item = document.createElement('div');
+    item.className = 'saved-item';
+    if (entry.hidden) item.style.opacity = '0.45';
+    item.innerHTML = `
+      <div class="saved-item-header">
+        <span class="saved-item-name" title="${esc(entry.question)}">${esc(entry.question || entry.queries[0]?.name || 'Saved search')}</span>
+        <span class="saved-item-date">${esc(date)}</span>
+        <button class="saved-item-btn" data-action="toggle" data-id="${esc(entry.id)}">${entry.hidden ? 'show' : 'hide'}</button>
+        <button class="saved-item-btn" data-action="load" data-id="${esc(entry.id)}">load</button>
+        <button class="saved-item-btn danger" data-action="delete" data-id="${esc(entry.id)}">✕</button>
+      </div>`;
+    item.querySelector('.saved-item-name').addEventListener('click', () => { item.classList.toggle('open'); });
+    item.querySelectorAll('[data-action]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        if (btn.dataset.action === 'load')   loadSavedSearch(id);
+        if (btn.dataset.action === 'delete') deleteSavedSearch(id);
+        if (btn.dataset.action === 'toggle') toggleSavedSearchHidden(id);
+      });
+    });
+    container.appendChild(item);
+  });
+}
 function showLoading(text) {
   document.getElementById('loadingText').textContent = text;
   document.getElementById('loadingState').style.display = 'block';
