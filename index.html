@@ -506,7 +506,10 @@ function initMap() {
   let center = [52.3676, 4.9041], zoom = 13;
   try {
     const saved = JSON.parse(localStorage.getItem('map_view') || 'null');
-    if (saved && isFinite(saved.lat) && isFinite(saved.lng) && isFinite(saved.zoom)) {
+    if (saved && typeof saved === 'object' &&
+        isFinite(saved.lat) && saved.lat >= -90 && saved.lat <= 90 &&
+        isFinite(saved.lng) && saved.lng >= -180 && saved.lng <= 180 &&
+        isFinite(saved.zoom) && saved.zoom >= 0 && saved.zoom <= 22) {
       center = [saved.lat, saved.lng]; zoom = saved.zoom;
     }
   } catch(_) {}
@@ -932,7 +935,7 @@ function renderOnMap(idx, elements) {
           const sw = S.map.latLngToContainerPoint(bounds.getSouthWest());
           const ne = S.map.latLngToContainerPoint(bounds.getNorthEast());
           const pxSize = Math.max(Math.abs(ne.x - sw.x), Math.abs(ne.y - sw.y));
-          if (pxSize > 0) thresholdZoom = S.map.getZoom() + Math.log2(pxSize / AREA_MIN_PX);
+          if (pxSize > 0) thresholdZoom = S.map.getZoom() + Math.log2(AREA_MIN_PX / pxSize);
         } catch(_) {}
         const fallback = L.circleMarker([center.lat, center.lng], { ...nodeStyle(color), opacity: 0, fillOpacity: 0 });
         fallback.bindPopup(buildPopup(el, name, color));
@@ -1617,24 +1620,28 @@ function openSvgExport() {
   // Restore saved SVG export settings
   try {
     const saved = JSON.parse(localStorage.getItem('svg_export_settings') || 'null');
-    if (saved) {
-      if (saved.style) {
+    if (saved && typeof saved === 'object') {
+      const VALID_STYLES = new Set(['areas', 'dots']);
+      if (VALID_STYLES.has(saved.style)) {
         const radio = document.querySelector(`input[name="svgStyle"][value="${CSS.escape(saved.style)}"]`);
         if (radio) radio.checked = true;
       }
       if (typeof saved.tiles === 'boolean') document.getElementById('svgTilesCheck').checked = saved.tiles;
       if (typeof saved.labels === 'boolean') document.getElementById('svgLabelCheck').checked = saved.labels;
-      if (saved.labelField) document.getElementById('svgLabelField').value = saved.labelField;
+      if (typeof saved.labelField === 'string') document.getElementById('svgLabelField').value = saved.labelField;
     }
   } catch(_) {}
 
-  // Build the label field dropdown from available tag keys across all elements
+  // Build the label field dropdown from available tag keys across all elements,
+  // sorted by frequency (most-filled fields first) to mirror the CSV field ordering
   const labelFieldEl = document.getElementById('svgLabelField');
   const prevLabelField = labelFieldEl.value;
-  const tagKeys = new Set(['name']);
-  all.forEach(({ el }) => Object.keys(el.tags || {}).forEach(k => tagKeys.add(k)));
-  labelFieldEl.innerHTML = [...tagKeys].sort().map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
-  if ([...tagKeys].includes(prevLabelField)) labelFieldEl.value = prevLabelField;
+  const tagKeyFreq = new Map(); // key → element count
+  all.forEach(({ el }) => Object.keys(el.tags || {}).forEach(k => tagKeyFreq.set(k, (tagKeyFreq.get(k) || 0) + 1)));
+  if (!tagKeyFreq.has('name')) tagKeyFreq.set('name', 0);
+  const sortedTagKeys = [...tagKeyFreq.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
+  labelFieldEl.innerHTML = sortedTagKeys.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
+  if (sortedTagKeys.includes(prevLabelField)) labelFieldEl.value = prevLabelField;
 
   // Toggle label field visibility based on checkbox state
   const labelGroup = document.getElementById('svgLabelFieldGroup');
@@ -1906,7 +1913,9 @@ async function doExportSvg() {
   if (includeLabels && labelCandidates.length) {
     const FONT_SIZE  = 11;  // px
     const LABEL_PAD  = 3;   // px gap between anchor and label
-    const CHAR_WIDTH = FONT_SIZE * 0.55; // approx char width
+    // 0.55× is a good average for Latin characters in proportional fonts;
+    // non-Latin scripts may be wider and could overflow their background rect
+    const CHAR_WIDTH = FONT_SIZE * 0.55;
     const LBL_H     = FONT_SIZE + 2;
 
     const labelGroup = document.createElementNS(svgNS, 'g');
