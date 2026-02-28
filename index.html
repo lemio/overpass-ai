@@ -541,8 +541,17 @@ Rules:
    Most-used tags (amenity, highway, shop, bicycle, building, etc.) have wiki pages.
 7. In each tag description clearly explain what the tag DOES and what it does NOT include.
 8. For area-based queries use: area["name"="AREA_NAME"]->.a; ... (area.a); ...
+   Area names can be ambiguous; always narrow down with admin_level to get the right boundary:
+   - Countries: area["name"="COUNTRY"]["admin_level"="2"]->.a;
+   - States/provinces: area["name"="REGION"]["admin_level"="4"]->.a;
+   - Cities/municipalities: area["name"="CITY"]["admin_level"="8"]->.a;
+   Always place the area filter (area.a) inside EACH node/way/relation filter:
+   ✓ CORRECT: area["name"="Amsterdam"]["admin_level"="8"]->.a;(node["amenity"="school"](area.a);way["amenity"="school"](area.a);relation["amenity"="school"](area.a););out geom;
+   ✗ WRONG:   area["name"="Amsterdam"]->.a;(node["amenity"="school"];way["amenity"="school"];relation["amenity"="school"];);out geom;
 9. Overpass QL tag filters use key=value syntax, e.g. [amenity=cafe], [highway=cycleway].
    Colons are only valid inside a key name itself (e.g. [addr:city=Amsterdam]).
+10. When using specific subtags that may not be universally applied (e.g. school:level, sport, cuisine),
+    always include a broader fallback query variant (e.g. just amenity=school) in addition to the specific one.
 
 Return ONLY valid JSON matching this schema (no markdown, no code fences):
 {
