@@ -1634,9 +1634,8 @@ async function doExportSvg() {
   svg.insertBefore(defs, svg.firstChild);
 
   // Draw queries
-  S.queries.forEach((q, qi) => {
+  function drawQueryToSvg(q, color) {
     if (!q.elements?.length) return;
-    const color = COLORS[qi % COLORS.length];
     const group = document.createElementNS(svgNS, 'g');
     group.setAttribute('id', sanitizeId(q.name));
     group.setAttribute('clip-path', 'url(#artboard-clip)');
@@ -1709,6 +1708,12 @@ async function doExportSvg() {
     });
 
     svg.appendChild(group);
+  }
+
+  S.queries.forEach((q, qi) => drawQueryToSvg(q, COLORS[qi % COLORS.length]));
+
+  Object.entries(S.shownSearches).forEach(([id, shown]) => {
+    (shown.queries || []).forEach((q, qi) => drawQueryToSvg(q, _colorForShownQuery(id, qi)));
   });
 
   const serializer = new XMLSerializer();
@@ -1738,6 +1743,16 @@ function getAllExportElements() {
       const eid = elId(el);
       if (!S.selectedIds.size || S.selectedIds.has(eid)) all.push({ el, qname: q.name, qi });
     });
+  });
+  let offset = S.queries.length;
+  Object.values(S.shownSearches).forEach(shown => {
+    (shown.queries || []).forEach((q, qi) => {
+      (q.elements || []).forEach(el => {
+        const eid = elId(el);
+        if (!S.selectedIds.size || S.selectedIds.has(eid)) all.push({ el, qname: q.name, qi: offset + qi });
+      });
+    });
+    offset += (shown.queries || []).length;
   });
   return all;
 }
@@ -1835,12 +1850,13 @@ async function showSavedSearchOnMap(id) {
 
   const layerGroups = [];
   const areaFallbacks = [];
+  const shownQueries = [];
 
   const b = S.map.getBounds();
   const bbox = `${b.getSouth().toFixed(6)},${b.getWest().toFixed(6)},${b.getNorth().toFixed(6)},${b.getEast().toFixed(6)}`;
 
   // Register early so _colorForShownSearch can compute correct offsets for subsequent calls
-  S.shownSearches[id] = { layerGroups, areaFallbacks };
+  S.shownSearches[id] = { layerGroups, areaFallbacks, queries: shownQueries };
   renderSavedSearches();
 
   const queriesToRun = entry.queries;
@@ -1860,6 +1876,7 @@ async function showSavedSearchOnMap(id) {
           (el.type === 'relation' && el.members)
         );
       }
+      shownQueries.push({ name: q.name, elements });
       const lg = L.layerGroup().addTo(S.map);
       const MAX_RENDER = 1000;
       elements.slice(0, MAX_RENDER).forEach(el => {
@@ -1893,6 +1910,8 @@ async function showSavedSearchOnMap(id) {
       layerGroups.push(lg);
     } catch (err) {
       console.warn('showSavedSearchOnMap query error:', err);
+      // Push empty entry to keep shownQueries and layerGroups arrays in sync
+      shownQueries.push({ name: q.name, elements: [] });
       layerGroups.push(null);
     }
   }
