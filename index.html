@@ -1636,6 +1636,8 @@ const svgExportState = {
 };
 let _svgTileCache = null;
 let _svgTileCacheKey = '';
+let _svgMapOverlay = null;
+let _svgMapOverlayTimer = null;
 
 function _buildQueryRows() {
   const rows = [];
@@ -1650,6 +1652,80 @@ function _buildQueryRows() {
   return rows;
 }
 
+function _refreshSvgMapOverlay() {
+  if (!_svgMapOverlay) return;
+  clearTimeout(_svgMapOverlayTimer);
+  _svgMapOverlayTimer = setTimeout(async () => {
+    if (!_svgMapOverlay) return;
+    try {
+      const svgStr = await _generateSvgString(true);
+      if (!_svgMapOverlay) return;
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(svgStr, 'image/svg+xml');
+      const svgEl = doc.documentElement;
+      svgEl.style.cssText = 'width:100%;height:100%;display:block;';
+      _svgMapOverlay.innerHTML = '';
+      _svgMapOverlay.appendChild(document.adoptNode(svgEl));
+    } catch(e) {
+      console.warn('SVG overlay refresh failed (will retry on next map event):', e);
+    }
+  }, 150);
+}
+
+function _showSvgMapOverlay() {
+  if (_svgMapOverlay) {
+    S.map.off('moveend zoomend', _refreshSvgMapOverlay);
+    _svgMapOverlay.remove();
+    _svgMapOverlay = null;
+  }
+  const div = document.createElement('div');
+  div.id = 'svg-map-overlay';
+  div.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:410;overflow:hidden;';
+  document.querySelector('.map-container').appendChild(div);
+  _svgMapOverlay = div;
+  S.queries.forEach(q => {
+    if (q.layerGroup) S.map.removeLayer(q.layerGroup);
+    if (q.labelLayerGroup) S.map.removeLayer(q.labelLayerGroup);
+  });
+  Object.values(S.shownSearches).forEach(shown => {
+    (shown.layerGroups || []).forEach(lg => { if (lg) S.map.removeLayer(lg); });
+    (shown.labelLayerGroups || []).forEach(lg => { if (lg) S.map.removeLayer(lg); });
+  });
+  S.map.on('moveend zoomend', _refreshSvgMapOverlay);
+  _refreshSvgMapOverlay();
+}
+
+function _hideSvgMapOverlay() {
+  if (!_svgMapOverlay) return;
+  clearTimeout(_svgMapOverlayTimer);
+  S.map.off('moveend zoomend', _refreshSvgMapOverlay);
+  _svgMapOverlay.remove();
+  _svgMapOverlay = null;
+  S.queries.forEach((q, qi) => {
+    const qs = svgExportState.queryStyles[`active-${qi}`];
+    if (!qs || qs.visible !== false) {
+      if (q.layerGroup) S.map.addLayer(q.layerGroup);
+    }
+  });
+  Object.entries(S.shownSearches).forEach(([id, shown]) => {
+    (shown.layerGroups || []).forEach((lg, qi) => {
+      const key = `shown-${id}-${qi}`;
+      const qs = svgExportState.queryStyles[key];
+      if ((!qs || qs.visible !== false) && lg) S.map.addLayer(lg);
+    });
+  });
+  const queryRows = _buildQueryRows();
+  queryRows.forEach(({ key }) => {
+    const qs = svgExportState.queryStyles[key];
+    if (!qs) return;
+    if (qs.color) _applySvgColorToMap(key, qs.color);
+    if (qs.strokeWidth) _applySvgStrokeWidthToMap(key, qs.strokeWidth);
+    if (qs.dashArray !== undefined) _applySvgDashArrayToMap(key, qs.dashArray);
+    if (qs.dotSize) _applySvgDotSizeToMap(key, qs.dotSize);
+    if (qs.labels) _applySvgLabelsToMap(key, true, qs.labelField || 'name', qs.labelFontSize || 11);
+  });
+}
+
 function openSvgView() {
   document.getElementById('resultsViewHeader').style.display = 'none';
   document.getElementById('csvViewHeader').style.display = 'none';
@@ -1660,6 +1736,7 @@ function openSvgView() {
 }
 
 function closeSvgView() {
+  _hideSvgMapOverlay();
   document.getElementById('resultsViewHeader').style.display = '';
   document.getElementById('svgViewHeader').style.display = 'none';
   document.getElementById('resultsList').style.display = '';
@@ -1726,6 +1803,7 @@ function openSvgExport() {
       _applySvgLabelsToMap(key, true, qs.labelField || 'name', qs.labelFontSize || 11);
     }
   });
+  _showSvgMapOverlay();
 }
 
 function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
@@ -1876,6 +1954,7 @@ function _resolveStyleTarget(key) {
 }
 
 function _applySvgColorToMap(key, color) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
   const t = _resolveStyleTarget(key);
   if (!t) return;
   t.elementLayers.forEach((layer, eid) => {
@@ -1898,6 +1977,7 @@ function _applySvgColorToMap(key, color) {
 }
 
 function _applySvgVisibilityToMap(key, visible) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
   const t = _resolveStyleTarget(key);
   if (!t) return;
   const lg = t.getLayerGroup();
@@ -1913,6 +1993,7 @@ function _applySvgVisibilityToMap(key, visible) {
 }
 
 function _applySvgStrokeWidthToMap(key, strokeWidth) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
   const t = _resolveStyleTarget(key);
   if (!t) return;
   t.elementLayers.forEach((layer, eid) => {
@@ -1929,6 +2010,7 @@ function _applySvgStrokeWidthToMap(key, strokeWidth) {
 }
 
 function _applySvgDashArrayToMap(key, dashArray) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
   const t = _resolveStyleTarget(key);
   if (!t) return;
   t.elementLayers.forEach((layer, eid) => {
@@ -1945,6 +2027,7 @@ function _applySvgDashArrayToMap(key, dashArray) {
 }
 
 function _applySvgDotSizeToMap(key, dotSize) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
   const t = _resolveStyleTarget(key);
   if (!t) return;
   t.elementLayers.forEach((layer, eid) => {
@@ -1961,6 +2044,7 @@ function _applySvgDotSizeToMap(key, dotSize) {
 }
 
 function _applySvgLabelsToMap(key, labels, labelField, fontSize) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
   const t = _resolveStyleTarget(key);
   if (!t) return;
   const existingLg = t.getLabelLayerGroup();
@@ -2097,7 +2181,7 @@ function _makeDotShape(svgNS, x, y, r, shape) {
   return el;
 }
 
-async function _generateSvgString() {
+async function _generateSvgString(skipBackground = false) {
   const b    = S.map.getBounds();
   const zoom = S.map.getZoom();
   const W    = document.getElementById('map').clientWidth  || 800;
@@ -2129,26 +2213,28 @@ async function _generateSvgString() {
   defs.appendChild(style);
   svg.appendChild(defs);
 
-  // Tile background
-  const tileImgs = await _getSvgTiles(b, zoom, zoom + svgExportState.tileZoomOffset, W, H, originX, originY, scale);
-  if (tileImgs.length) {
-    const bgGroup = document.createElementNS(svgNS, 'g');
-    bgGroup.setAttribute('id', 'map-tiles');
-    tileImgs.forEach(t => {
-      const img = document.createElementNS(svgNS, 'image');
-      img.setAttribute('href',                t.dataUrl);
-      img.setAttribute('x',                   t.px.toFixed(2));
-      img.setAttribute('y',                   t.py.toFixed(2));
-      img.setAttribute('width',               t.tw.toFixed(2));
-      img.setAttribute('height',              t.tw.toFixed(2));
-      img.setAttribute('preserveAspectRatio', 'none');
-      bgGroup.appendChild(img);
-    });
-    svg.appendChild(bgGroup);
-  } else if (svgExportState.tileProvider === 'none') {
-    const bg = document.createElementNS(svgNS, 'rect');
-    bg.setAttribute('width', W); bg.setAttribute('height', H); bg.setAttribute('fill', '#141414');
-    svg.appendChild(bg);
+  // Tile background (skipped when used as a map overlay since Leaflet provides the background)
+  if (!skipBackground) {
+    const tileImgs = await _getSvgTiles(b, zoom, zoom + svgExportState.tileZoomOffset, W, H, originX, originY, scale);
+    if (tileImgs.length) {
+      const bgGroup = document.createElementNS(svgNS, 'g');
+      bgGroup.setAttribute('id', 'map-tiles');
+      tileImgs.forEach(t => {
+        const img = document.createElementNS(svgNS, 'image');
+        img.setAttribute('href',                t.dataUrl);
+        img.setAttribute('x',                   t.px.toFixed(2));
+        img.setAttribute('y',                   t.py.toFixed(2));
+        img.setAttribute('width',               t.tw.toFixed(2));
+        img.setAttribute('height',              t.tw.toFixed(2));
+        img.setAttribute('preserveAspectRatio', 'none');
+        bgGroup.appendChild(img);
+      });
+      svg.appendChild(bgGroup);
+    } else if (svgExportState.tileProvider === 'none') {
+      const bg = document.createElementNS(svgNS, 'rect');
+      bg.setAttribute('width', W); bg.setAttribute('height', H); bg.setAttribute('fill', '#141414');
+      svg.appendChild(bg);
+    }
   }
 
   const labelCandidates = [];
