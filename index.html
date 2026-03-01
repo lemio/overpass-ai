@@ -7,6 +7,9 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -27,7 +30,7 @@
       --radius: 3px;
     }
 
-    html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 13px; background: var(--bg-0); color: var(--text-0); overflow: hidden; }
+    html, body { height: 100%; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 13px; background: var(--bg-0); color: var(--text-0); overflow: hidden; }
 
     /* ── Layout ────────────────────────────────────────────────── */
     .app { display: flex; flex-direction: column; height: 100vh; }
@@ -265,6 +268,19 @@
     .svg-query-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
     .svg-query-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
     .svg-query-select { font-size: 11px; padding: 2px 4px; background: var(--bg-2); color: var(--text-1); border: 1px solid var(--border); border-radius: 3px; }
+
+    /* ── SVG Export side panel ───────────────────────────────────── */
+    #svgPanelBody { flex: 1; overflow-y: auto; }
+    .svg-preview-img { width: 100%; display: block; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-0); object-fit: contain; min-height: 80px; }
+    .svg-qstyle-row { border-bottom: 1px solid var(--border); padding: 6px 0; }
+    .svg-qstyle-header { display: flex; align-items: center; gap: 5px; margin-bottom: 4px; }
+    .svg-qstyle-name { flex: 1; font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .svg-qstyle-controls { display: flex; flex-wrap: wrap; gap: 3px 10px; padding-left: 16px; }
+    .svg-qstyle-ctrl { display: flex; align-items: center; gap: 3px; font-size: 10px; color: var(--text-1); }
+    .svg-qstyle-ctrl label { color: var(--text-2); }
+    .svg-color-input { width: 22px; height: 18px; border: 1px solid var(--border-mid); border-radius: 2px; padding: 1px; cursor: pointer; background: none; }
+    .svg-qstyle-sel { font-size: 10px; padding: 1px 3px; background: var(--bg-2); color: var(--text-1); border: 1px solid var(--border); border-radius: 3px; }
+    .svg-qstyle-num { width: 34px; font-size: 10px; padding: 1px 3px; background: var(--bg-3); color: var(--text-0); border: 1px solid var(--border-mid); border-radius: 3px; text-align: center; }
   </style>
 </head>
 <body>
@@ -365,6 +381,15 @@
         </div>
       </div>
       <div class="csv-field-list" id="csvFieldList" style="display:none;"></div>
+      <!-- SVG view header (hidden by default) -->
+      <div class="panel-header" id="svgViewHeader" style="display:none;">
+        <span style="font-size:11px;"><i class="fa-regular fa-image" style="margin-right:4px;"></i>SVG Export</span>
+        <div class="results-header-btns">
+          <button class="btn btn-sm btn-primary" id="doExportSvgBtn" style="width:auto;padding:3px 8px;" title="Download SVG"><i class="fa-solid fa-download"></i></button>
+          <button class="btn btn-sm btn-icon" id="closeSvgViewBtn" title="Back to Results"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div id="svgPanelBody" style="display:none;"></div>
     </aside>
 
   </div><!-- /layout -->
@@ -399,37 +424,6 @@
     <div class="modal-actions">
       <button class="btn" id="cancelSettingsBtn">Cancel</button>
       <button class="btn btn-primary" id="saveSettingsBtn" style="width:auto;padding:6px 18px;">Save</button>
-    </div>
-  </div>
-</div>
-
-
-<!-- SVG Export modal -->
-<div class="modal-overlay" id="svgExportOverlay">
-  <div class="modal svg-modal">
-    <div class="modal-title"><i class="fa-regular fa-image" style="margin-right:6px;"></i>Export SVG</div>
-    <div class="form-group">
-      <label class="label">Default Style</label>
-      <label class="radio-row"><input type="radio" name="svgStyle" value="areas" checked /> Polygons (areas as shapes, lines as lines)</label>
-      <label class="radio-row"><input type="radio" name="svgStyle" value="dots" /> Dots (force all elements as points)</label>
-    </div>
-    <div class="form-group" id="svgQueryStylesGroup" style="display:none;">
-      <label class="label">Per-Query Style</label>
-      <div id="svgQueryStyles"></div>
-    </div>
-    <div class="form-group">
-      <label class="check-row"><input type="checkbox" id="svgTilesCheck" checked /> Include map background tiles (OpenStreetMap)</label>
-    </div>
-    <div class="form-group">
-      <label class="check-row"><input type="checkbox" id="svgLabelCheck" /> Include labels</label>
-      <div id="svgLabelFieldGroup" style="display:none; margin-top:6px;">
-        <label class="label" style="margin-bottom:3px;">Label field</label>
-        <select id="svgLabelField" style="font-size:11px; padding:3px 6px; width:auto;"><option value="name">name</option></select>
-      </div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" id="cancelSvgBtn">Cancel</button>
-      <button class="btn btn-primary" id="doExportSvgBtn" style="width:auto;padding:6px 18px;"><i class="fa-solid fa-download"></i> Export SVG</button>
     </div>
   </div>
 </div>
@@ -571,13 +565,9 @@ function bindEvents() {
   });
   document.getElementById('doExportCsvBtn').addEventListener('click', doExportCsv);
 
-  // SVG Export modal
-  document.getElementById('cancelSvgBtn').addEventListener('click', () => document.getElementById('svgExportOverlay').classList.remove('open'));
-  document.getElementById('svgExportOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) e.target.classList.remove('open'); });
+  // SVG Export panel
   document.getElementById('doExportSvgBtn').addEventListener('click', doExportSvg);
-  document.getElementById('svgLabelCheck').addEventListener('change', e => {
-    document.getElementById('svgLabelFieldGroup').style.display = e.target.checked ? '' : 'none';
-  });
+  document.getElementById('closeSvgViewBtn').addEventListener('click', closeSvgView);
 
   // Share
   document.getElementById('shareBtn').addEventListener('click', shareQuery);
@@ -1612,276 +1602,447 @@ function selectByTagValue(key, value, clickedChip) {
   updateStatusResults();
 }
 
-/* ── SVG export ─────────────────────────────────────────── */
+/* ── SVG export ─────────────────────────────────────── */
+
+const TILE_PROVIDERS = {
+  osm:        { name: 'OSM Standard',    url: (z,x,y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png` },
+  hot:        { name: 'OSM HOT',          url: (z,x,y) => `https://a.tile.openstreetmap.fr/hot/${z}/${x}/${y}.png` },
+  cartoLight: { name: 'CartoDB Light',   url: (z,x,y) => `https://a.basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png` },
+  cartoDark:  { name: 'CartoDB Dark',    url: (z,x,y) => `https://a.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png` },
+  none:       { name: 'No tiles',        url: null },
+};
+
+const svgExportState = {
+  globalStyle: 'areas',
+  tileProvider: 'osm',
+  includeLabels: false,
+  labelField: 'name',
+  queryStyles: {},
+};
+let _svgPreviewTimer = null;
+let _svgTileCache = null;
+let _svgTileCacheKey = '';
+
+function _buildQueryRows() {
+  const rows = [];
+  S.queries.forEach((q, qi) => {
+    if (q.elements?.length) rows.push({ q, name: q.name, color: COLORS[qi % COLORS.length], key: `active-${qi}` });
+  });
+  Object.entries(S.shownSearches).forEach(([id, shown]) => {
+    (shown.queries || []).forEach((q, qi) => {
+      if (q.elements?.length) rows.push({ q, name: q.name, color: _colorForShownQuery(id, qi), key: `shown-${id}-${qi}` });
+    });
+  });
+  return rows;
+}
+
+function openSvgView() {
+  document.getElementById('resultsViewHeader').style.display = 'none';
+  document.getElementById('csvViewHeader').style.display = 'none';
+  document.getElementById('svgViewHeader').style.display = '';
+  document.getElementById('resultsList').style.display = 'none';
+  document.getElementById('csvFieldList').style.display = 'none';
+  document.getElementById('svgPanelBody').style.display = '';
+}
+
+function closeSvgView() {
+  document.getElementById('resultsViewHeader').style.display = '';
+  document.getElementById('svgViewHeader').style.display = 'none';
+  document.getElementById('resultsList').style.display = '';
+  document.getElementById('svgPanelBody').style.display = 'none';
+  if (_svgPreviewTimer) { clearTimeout(_svgPreviewTimer); _svgPreviewTimer = null; }
+}
+
 function openSvgExport() {
   const all = getAllExportElements();
   if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
 
-  // Restore saved SVG export settings
+  // Restore settings from localStorage
   try {
     const saved = JSON.parse(localStorage.getItem('svg_export_settings') || 'null');
     if (saved && typeof saved === 'object') {
-      const VALID_STYLES = new Set(['areas', 'dots']);
-      if (VALID_STYLES.has(saved.style)) {
-        const radio = document.querySelector(`input[name="svgStyle"][value="${CSS.escape(saved.style)}"]`);
-        if (radio) radio.checked = true;
-      }
-      if (typeof saved.tiles === 'boolean') document.getElementById('svgTilesCheck').checked = saved.tiles;
-      if (typeof saved.labels === 'boolean') document.getElementById('svgLabelCheck').checked = saved.labels;
-      if (typeof saved.labelField === 'string') document.getElementById('svgLabelField').value = saved.labelField;
+      if (['areas','dots'].includes(saved.style)) svgExportState.globalStyle = saved.style;
+      if (TILE_PROVIDERS[saved.tileProvider]) svgExportState.tileProvider = saved.tileProvider;
+      if (typeof saved.labels === 'boolean') svgExportState.includeLabels = saved.labels;
+      if (typeof saved.labelField === 'string') svgExportState.labelField = saved.labelField;
     }
   } catch(_) {}
 
-  // Build the label field dropdown from available tag keys across all elements,
-  // sorted by frequency (most-filled fields first) to mirror the CSV field ordering
-  const labelFieldEl = document.getElementById('svgLabelField');
-  const prevLabelField = labelFieldEl.value;
-  const tagKeyFreq = new Map(); // key → element count
+  // Build label field list
+  const tagKeyFreq = new Map();
   all.forEach(({ el }) => Object.keys(el.tags || {}).forEach(k => tagKeyFreq.set(k, (tagKeyFreq.get(k) || 0) + 1)));
   if (!tagKeyFreq.has('name')) tagKeyFreq.set('name', 0);
   const sortedTagKeys = [...tagKeyFreq.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
-  labelFieldEl.innerHTML = sortedTagKeys.map(k => `<option value="${esc(k)}">${esc(k)}</option>`).join('');
-  if (sortedTagKeys.includes(prevLabelField)) labelFieldEl.value = prevLabelField;
 
-  // Toggle label field visibility based on checkbox state
-  const labelGroup = document.getElementById('svgLabelFieldGroup');
-  labelGroup.style.display = document.getElementById('svgLabelCheck').checked ? '' : 'none';
-
-  // Build per-query style rows
-  const container = document.getElementById('svgQueryStyles');
-  const group     = document.getElementById('svgQueryStylesGroup');
-  container.innerHTML = '';
-
-  const queryRows = [];
-  S.queries.forEach((q, qi) => {
-    if (q.elements?.length) queryRows.push({ name: q.name, color: COLORS[qi % COLORS.length], key: `active-${qi}` });
-  });
-  Object.entries(S.shownSearches).forEach(([id, shown]) => {
-    (shown.queries || []).forEach((q, qi) => {
-      if (q.elements?.length) queryRows.push({ name: q.name, color: _colorForShownQuery(id, qi), key: `shown-${id}-${qi}` });
-    });
+  // Initialize per-query styles
+  const queryRows = _buildQueryRows();
+  queryRows.forEach(({ key, color }) => {
+    if (!svgExportState.queryStyles[key]) {
+      svgExportState.queryStyles[key] = { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true };
+    } else if (!svgExportState.queryStyles[key].color) {
+      svgExportState.queryStyles[key].color = color;
+    }
   });
 
+  // Build panel body
+  const body = document.getElementById('svgPanelBody');
+  body.innerHTML = '';
+
+  // Preview area
+  const previewWrap = document.createElement('div');
+  previewWrap.style.cssText = 'padding:10px 10px 0;flex-shrink:0;';
+  previewWrap.innerHTML = `<div class="label" style="margin-bottom:5px;">Preview</div>
+    <img id="svgPreviewImg" class="svg-preview-img" alt="SVG preview">
+    <div id="svgPreviewStatus" style="font-size:10px;color:var(--text-2);text-align:center;margin-top:3px;">Generating…</div>`;
+  body.appendChild(previewWrap);
+
+  // Settings area
+  const settings = document.createElement('div');
+  settings.id = 'svgPanelSettings';
+  settings.style.cssText = 'padding:10px;';
+  body.appendChild(settings);
+
+  _renderSvgSettings(settings, sortedTagKeys, queryRows);
+  openSvgView();
+  _svgTileCache = null;
+  scheduleSvgPreview();
+}
+
+function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
+  const provOpts = Object.entries(TILE_PROVIDERS)
+    .map(([k, p]) => `<option value="${esc(k)}"${svgExportState.tileProvider === k ? ' selected' : ''}>${esc(p.name)}</option>`)
+    .join('');
+  const lblOpts = sortedTagKeys
+    .map(k => `<option value="${esc(k)}"${svgExportState.labelField === k ? ' selected' : ''}>${esc(k)}</option>`)
+    .join('');
+
+  let perQueryHtml = '';
   if (queryRows.length > 1) {
-    queryRows.forEach(({ name, color, key }) => {
-      const row = document.createElement('div');
-      row.className = 'svg-query-row';
-      row.innerHTML = `<span class="svg-query-swatch" style="background:${color}"></span><span class="svg-query-name" title="${esc(name)}">${esc(name)}</span><select class="svg-query-select" data-key="${esc(key)}"><option value="auto">Auto</option><option value="polygons">Polygons</option><option value="dots">Dots</option></select>`;
-      container.appendChild(row);
+    perQueryHtml = `<div class="sep"></div><div class="label" style="margin-bottom:4px;">Per-Query Style</div>`;
+    queryRows.forEach(({ key, name, color }) => {
+      const qs = svgExportState.queryStyles[key] || {};
+      const c = qs.color || color;
+      perQueryHtml += `<div class="svg-qstyle-row" data-key="${esc(key)}">
+        <div class="svg-qstyle-header">
+          <input type="color" class="svg-color-input" value="${esc(c)}" data-field="color" title="Colour">
+          <span class="svg-qstyle-name" title="${esc(name)}">${esc(name)}</span>
+          <label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-1);cursor:pointer;flex-shrink:0;">
+            <input type="checkbox" data-field="visible"${qs.visible !== false ? ' checked' : ''}> Show
+          </label>
+        </div>
+        <div class="svg-qstyle-controls">
+          <div class="svg-qstyle-ctrl"><label>Style</label>
+            <select class="svg-qstyle-sel" data-field="queryStyle">
+              <option value="auto"${(qs.queryStyle||'auto')==='auto'?' selected':''}>Auto</option>
+              <option value="polygons"${qs.queryStyle==='polygons'?' selected':''}>Polygons</option>
+              <option value="dots"${qs.queryStyle==='dots'?' selected':''}>Dots</option>
+            </select></div>
+          <div class="svg-qstyle-ctrl"><label>Wt</label>
+            <input type="number" class="svg-qstyle-num" min="0.5" max="10" step="0.5" value="${qs.strokeWidth||2}" data-field="strokeWidth"></div>
+          <div class="svg-qstyle-ctrl"><label>Dash</label>
+            <select class="svg-qstyle-sel" data-field="dashArray">
+              <option value=""${!qs.dashArray?' selected':''}>&#x2014;</option>
+              <option value="6,4"${qs.dashArray==='6,4'?' selected':''}>- -</option>
+              <option value="2,4"${qs.dashArray==='2,4'?' selected':''}>&#xB7;&#xB7;&#xB7;</option>
+            </select></div>
+          <div class="svg-qstyle-ctrl"><label>Dot</label>
+            <select class="svg-qstyle-sel" data-field="dotShape">
+              <option value="circle"${(qs.dotShape||'circle')==='circle'?' selected':''}>&#x25CF;</option>
+              <option value="diamond"${qs.dotShape==='diamond'?' selected':''}>&#x25C6;</option>
+              <option value="square"${qs.dotShape==='square'?' selected':''}>&#x25A0;</option>
+            </select></div>
+          <div class="svg-qstyle-ctrl"><label>Sz</label>
+            <input type="number" class="svg-qstyle-num" min="2" max="20" step="1" value="${qs.dotSize||5}" data-field="dotSize"></div>
+        </div>
+      </div>`;
     });
-    group.style.display = '';
-  } else {
-    group.style.display = 'none';
   }
 
-  document.getElementById('svgExportOverlay').classList.add('open');
+  settings.innerHTML = `
+    <div class="form-group">
+      <label class="label">Default Style</label>
+      <label class="radio-row"><input type="radio" name="svgStylePanel" value="areas"${svgExportState.globalStyle==='areas'?' checked':''}> Polygons</label>
+      <label class="radio-row"><input type="radio" name="svgStylePanel" value="dots"${svgExportState.globalStyle==='dots'?' checked':''}> Dots (all as points)</label>
+    </div>
+    <div class="form-group">
+      <label class="label" for="svgTileProviderSel">Map Background</label>
+      <select id="svgTileProviderSel">${provOpts}</select>
+    </div>
+    <div class="form-group">
+      <label class="check-row"><input type="checkbox" id="svgLabelCheckPanel"${svgExportState.includeLabels?' checked':''}> Include labels</label>
+      <div id="svgLabelFieldGroupPanel" style="${svgExportState.includeLabels?'':'display:none;'}margin-top:6px;">
+        <label class="label" style="margin-bottom:3px;">Label field</label>
+        <select id="svgLabelFieldPanel" style="font-size:11px;padding:3px 6px;width:auto;">${lblOpts}</select>
+      </div>
+    </div>
+    ${perQueryHtml}`;
+
+  // Bind settings changes
+  settings.querySelectorAll('input[name="svgStylePanel"]').forEach(r =>
+    r.addEventListener('change', () => { svgExportState.globalStyle = r.value; scheduleSvgPreview(); }));
+  settings.querySelector('#svgTileProviderSel').addEventListener('change', e => {
+    svgExportState.tileProvider = e.target.value; _svgTileCache = null; scheduleSvgPreview(); });
+  settings.querySelector('#svgLabelCheckPanel').addEventListener('change', e => {
+    svgExportState.includeLabels = e.target.checked;
+    settings.querySelector('#svgLabelFieldGroupPanel').style.display = e.target.checked ? '' : 'none';
+    scheduleSvgPreview(); });
+  settings.querySelector('#svgLabelFieldPanel').addEventListener('change', e => {
+    svgExportState.labelField = e.target.value; scheduleSvgPreview(); });
+  settings.querySelectorAll('.svg-qstyle-row').forEach(row => {
+    const key = row.dataset.key;
+    row.querySelectorAll('[data-field]').forEach(input => {
+      const field = input.dataset.field;
+      input.addEventListener(input.type === 'color' ? 'input' : 'change', () => {
+        if (!svgExportState.queryStyles[key]) svgExportState.queryStyles[key] = {};
+        const qs = svgExportState.queryStyles[key];
+        if (field === 'visible') qs[field] = input.checked;
+        else if (field === 'strokeWidth' || field === 'dotSize') qs[field] = parseFloat(input.value) || (field === 'dotSize' ? 5 : 2);
+        else qs[field] = input.value;
+        scheduleSvgPreview();
+      });
+    });
+  });
+}
+
+function scheduleSvgPreview() {
+  if (_svgPreviewTimer) clearTimeout(_svgPreviewTimer);
+  const statusEl = document.getElementById('svgPreviewStatus');
+  if (statusEl) statusEl.textContent = 'Generating…';
+  _svgPreviewTimer = setTimeout(updateSvgPreview, 400);
+}
+
+async function updateSvgPreview() {
+  _svgPreviewTimer = null;
+  const imgEl = document.getElementById('svgPreviewImg');
+  const statusEl = document.getElementById('svgPreviewStatus');
+  if (!imgEl) return;
+  try {
+    const svgStr = await _generateSvgString();
+    const blob   = new Blob([svgStr], { type: 'image/svg+xml' });
+    const url    = URL.createObjectURL(blob);
+    if (imgEl.dataset.prevUrl) URL.revokeObjectURL(imgEl.dataset.prevUrl);
+    imgEl.dataset.prevUrl = url;
+    imgEl.src = url;
+    if (statusEl) statusEl.textContent = '';
+  } catch(e) {
+    if (statusEl) statusEl.textContent = 'Preview failed';
+    console.warn('SVG preview error:', e);
+  }
 }
 
 async function doExportSvg() {
-  document.getElementById('svgExportOverlay').classList.remove('open');
-
-  const globalForceDots = document.querySelector('input[name="svgStyle"]:checked')?.value === 'dots';
-  const queryStyleMap   = {};
-  document.querySelectorAll('#svgQueryStyles .svg-query-select').forEach(sel => {
-    queryStyleMap[sel.dataset.key] = sel.value;
-  });
-  const includeTiles  = document.getElementById('svgTilesCheck').checked;
-  const includeLabels = document.getElementById('svgLabelCheck').checked;
-  const labelField    = document.getElementById('svgLabelField').value || 'name';
-
-  // Persist export settings so the user doesn't have to re-configure on each export
   try {
     localStorage.setItem('svg_export_settings', JSON.stringify({
-      style: document.querySelector('input[name="svgStyle"]:checked')?.value || 'areas',
-      tiles: includeTiles,
-      labels: includeLabels,
-      labelField,
+      style: svgExportState.globalStyle,
+      tileProvider: svgExportState.tileProvider,
+      labels: svgExportState.includeLabels,
+      labelField: svgExportState.labelField,
     }));
   } catch(_) {}
+  setStatus('Generating SVG…');
+  try {
+    const svgStr = await _generateSvgString();
+    downloadBlob(svgStr, `overpass-ai-${Date.now()}.svg`, 'image/svg+xml;charset=utf-8;');
+    setStatus('SVG exported');
+  } catch(e) {
+    setStatus('SVG export failed');
+    showError(`SVG export failed: ${e.message}`);
+  }
+}
 
-  const b     = S.map.getBounds();
-  const zoom  = S.map.getZoom();
-  const W     = document.getElementById('map').clientWidth  || 800;
-  const H     = document.getElementById('map').clientHeight || 600;
+async function _getSvgTiles(b, zoom, W, H, originX, originY, scale) {
+  const provider = TILE_PROVIDERS[svgExportState.tileProvider];
+  if (!provider || !provider.url) return [];
+  const tileZ    = Math.round(zoom);
+  const TILE_SIZE = 256;
+  const n        = Math.pow(2, tileZ);
+  function latToTileY(lat) { return Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * n); }
+  function lonToTileX(lon) { return Math.floor((lon + 180) / 360 * n); }
+  const x0 = lonToTileX(b.getWest()), x1 = lonToTileX(b.getEast());
+  const y0 = latToTileY(b.getNorth()), y1 = latToTileY(b.getSouth());
+  const tiles = [];
+  for (let tx = x0; tx <= x1; tx++) {
+    for (let ty = y0; ty <= y1; ty++) {
+      const url = provider.url(tileZ, tx, ty);
+      const px  = (tx * TILE_SIZE - originX) * scale;
+      const py  = (ty * TILE_SIZE - originY) * scale;
+      const tw  = TILE_SIZE * scale;
+      tiles.push({ url, px, py, tw });
+    }
+  }
+  const cacheKey = `${svgExportState.tileProvider}|${tileZ}|${b.getSouth().toFixed(4)}|${b.getWest().toFixed(4)}|${b.getNorth().toFixed(4)}|${b.getEast().toFixed(4)}`;
+  if (_svgTileCache && _svgTileCacheKey === cacheKey) return _svgTileCache;
+  const results = await Promise.all(tiles.map(async t => {
+    try {
+      const resp   = await fetch(t.url);
+      const blob   = await resp.blob();
+      const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+      return { ...t, dataUrl };
+    } catch(_) { return { ...t, dataUrl: t.url }; }
+  }));
+  _svgTileCache = results;
+  _svgTileCacheKey = cacheKey;
+  return results;
+}
 
-  // Mercator helpers (Web Mercator / EPSG:3857 pixel coords at given zoom)
+function _makeDotShape(svgNS, x, y, r, shape) {
+  let el;
+  if (shape === 'diamond') {
+    el = document.createElementNS(svgNS, 'polygon');
+    el.setAttribute('points', `${x.toFixed(2)},${(y-r).toFixed(2)} ${(x+r).toFixed(2)},${y.toFixed(2)} ${x.toFixed(2)},${(y+r).toFixed(2)} ${(x-r).toFixed(2)},${y.toFixed(2)}`);
+  } else if (shape === 'square') {
+    el = document.createElementNS(svgNS, 'rect');
+    el.setAttribute('x', (x - r).toFixed(2));
+    el.setAttribute('y', (y - r).toFixed(2));
+    el.setAttribute('width',  (r * 2).toFixed(2));
+    el.setAttribute('height', (r * 2).toFixed(2));
+  } else {
+    el = document.createElementNS(svgNS, 'circle');
+    el.setAttribute('cx', x.toFixed(2));
+    el.setAttribute('cy', y.toFixed(2));
+    el.setAttribute('r',  r.toFixed(2));
+  }
+  return el;
+}
+
+async function _generateSvgString() {
+  const b    = S.map.getBounds();
+  const zoom = S.map.getZoom();
+  const W    = document.getElementById('map').clientWidth  || 800;
+  const H    = document.getElementById('map').clientHeight || 600;
+
   const TILE_SIZE = 256;
   function latToY(lat) {
     const sin = Math.sin(lat * Math.PI / 180);
     return (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * TILE_SIZE * Math.pow(2, zoom);
   }
-  function lonToX(lon) {
-    return ((lon + 180) / 360) * TILE_SIZE * Math.pow(2, zoom);
-  }
-
+  function lonToX(lon) { return ((lon + 180) / 360) * TILE_SIZE * Math.pow(2, zoom); }
   const originX = lonToX(b.getWest());
   const originY = latToY(b.getNorth());
   const scale   = W / (lonToX(b.getEast()) - originX);
-
-  function geoToSvg(lat, lon) {
-    return { x: (lonToX(lon) - originX) * scale, y: (latToY(lat) - originY) * scale };
-  }
-
-  // Collect tile URLs for current view
-  async function getTileImages() {
-    const tileZ    = Math.round(zoom);
-    const tileSize = TILE_SIZE;
-    const n        = Math.pow(2, tileZ);
-
-    function latToTileY(lat) { return Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * n); }
-    function lonToTileX(lon) { return Math.floor((lon + 180) / 360 * n); }
-
-    const x0 = lonToTileX(b.getWest());
-    const x1 = lonToTileX(b.getEast());
-    const y0 = latToTileY(b.getNorth());
-    const y1 = latToTileY(b.getSouth());
-
-    const tiles = [];
-    for (let tx = x0; tx <= x1; tx++) {
-      for (let ty = y0; ty <= y1; ty++) {
-        const url  = `https://tile.openstreetmap.org/${tileZ}/${tx}/${ty}.png`;
-        const px   = (tx * tileSize - originX) * scale;
-        const py   = (ty * tileSize - originY) * scale;
-        const tw   = tileSize * scale;
-        tiles.push({ url, px, py, tw });
-      }
-    }
-
-    // Fetch tiles as data URLs for embedding
-    const results = await Promise.all(tiles.map(async t => {
-      try {
-        const resp = await fetch(t.url);
-        const blob = await resp.blob();
-        const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
-        return { ...t, dataUrl };
-      } catch (_) {
-        return { ...t, dataUrl: t.url };
-      }
-    }));
-    return results;
-  }
-
-  setStatus('Generating SVG…');
-
-  let tileImgs = [];
-  if (includeTiles) {
-    try { tileImgs = await getTileImages(); } catch(_) {}
-  }
+  function geoToSvg(lat, lon) { return { x: (lonToX(lon) - originX) * scale, y: (latToY(lat) - originY) * scale }; }
 
   const svgNS = 'http://www.w3.org/2000/svg';
   const svg   = document.createElementNS(svgNS, 'svg');
-  svg.setAttribute('xmlns', svgNS);
+  svg.setAttribute('xmlns',       svgNS);
   svg.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
   svg.setAttribute('width',  W);
   svg.setAttribute('height', H);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
 
-  // Background tiles
+  // Embed Inter font reference so the SVG renders correctly when opened standalone
+  const defs  = document.createElementNS(svgNS, 'defs');
+  const style = document.createElementNS(svgNS, 'style');
+  style.textContent = "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');";
+  defs.appendChild(style);
+  svg.appendChild(defs);
+
+  // Tile background
+  const tileImgs = await _getSvgTiles(b, zoom, W, H, originX, originY, scale);
   if (tileImgs.length) {
     const bgGroup = document.createElementNS(svgNS, 'g');
     bgGroup.setAttribute('id', 'map-tiles');
     tileImgs.forEach(t => {
       const img = document.createElementNS(svgNS, 'image');
-      img.setAttribute('href', t.dataUrl);
-      img.setAttribute('x',      t.px.toFixed(2));
-      img.setAttribute('y',      t.py.toFixed(2));
-      img.setAttribute('width',  t.tw.toFixed(2));
-      img.setAttribute('height', t.tw.toFixed(2));
+      img.setAttribute('href',                t.dataUrl);
+      img.setAttribute('x',                   t.px.toFixed(2));
+      img.setAttribute('y',                   t.py.toFixed(2));
+      img.setAttribute('width',               t.tw.toFixed(2));
+      img.setAttribute('height',              t.tw.toFixed(2));
       img.setAttribute('preserveAspectRatio', 'none');
       bgGroup.appendChild(img);
     });
     svg.appendChild(bgGroup);
-  } else if (!includeTiles) {
-    // Dark background rect
+  } else if (svgExportState.tileProvider === 'none') {
     const bg = document.createElementNS(svgNS, 'rect');
     bg.setAttribute('width', W); bg.setAttribute('height', H); bg.setAttribute('fill', '#141414');
     svg.appendChild(bg);
   }
 
-  // Clip to artboard
-  const defs  = document.createElementNS(svgNS, 'defs');
-  const clip  = document.createElementNS(svgNS, 'clipPath');
-  clip.setAttribute('id', 'artboard-clip');
-  const clipRect = document.createElementNS(svgNS, 'rect');
-  clipRect.setAttribute('width', W); clipRect.setAttribute('height', H);
-  clip.appendChild(clipRect);
-  defs.appendChild(clip);
-  svg.insertBefore(defs, svg.firstChild);
+  const globalForceDots = svgExportState.globalStyle === 'dots';
+  const includeLabels   = svgExportState.includeLabels;
+  const labelField      = svgExportState.labelField || 'name';
+  const labelCandidates = [];
 
-  // Draw queries; collect label candidates for later overlap-aware placement
-  const labelCandidates = []; // { text, anchorX, anchorY, isArea, areaMinX, areaMinY, areaMaxX, areaMaxY }
-
-  function drawQueryToSvg(q, color, key) {
+  function drawQueryElements(q, qStyle, selectionPass) {
     if (!q.elements?.length) return;
-    const override  = queryStyleMap[key];
+    const override  = qStyle.queryStyle || 'auto';
     const forceDots = override === 'dots' ? true : override === 'polygons' ? false : globalForceDots;
-    const group = document.createElementNS(svgNS, 'g');
-    group.setAttribute('id', sanitizeId(q.name));
-    group.setAttribute('clip-path', 'url(#artboard-clip)');
+    const color  = selectionPass ? SEL_COLOR : qStyle.color;
+    const sw     = qStyle.strokeWidth || 2;
+    const da     = qStyle.dashArray   || '';
+    const dotR   = qStyle.dotSize     || 5;
+    const dotShp = qStyle.dotShape    || 'circle';
 
-    (q.elements || []).forEach(el => {
-      const name = elName(el);
-      const sid  = sanitizeId(name);
+    const group = document.createElementNS(svgNS, 'g');
+    group.setAttribute('id', sanitizeId(q.name) + (selectionPass ? '-sel' : ''));
+
+    const elements = selectionPass
+      ? q.elements.filter(el => S.selectedIds.has(elId(el)))
+      : (S.selectedIds.size ? q.elements.filter(el => !S.selectedIds.has(elId(el))) : q.elements);
+
+    elements.forEach(el => {
+      const name      = elName(el);
+      const sid       = sanitizeId(name);
       const labelText = (el.tags || {})[labelField] || '';
 
       if (el.type === 'node' || forceDots) {
-        // Point
-        const lat = el.type === 'node' ? el.lat : (el.geometry?.[0]?.lat);
-        const lon = el.type === 'node' ? el.lon : (el.geometry?.[0]?.lon);
+        const lat = el.type === 'node' ? el.lat : el.geometry?.[0]?.lat;
+        const lon = el.type === 'node' ? el.lon : el.geometry?.[0]?.lon;
         if (lat == null || lon == null) return;
         const { x, y } = geoToSvg(lat, lon);
         if (x < -20 || y < -20 || x > W + 20 || y > H + 20) return;
-        const circle = document.createElementNS(svgNS, 'circle');
-        circle.setAttribute('id', sid);
-        circle.setAttribute('cx', x.toFixed(2));
-        circle.setAttribute('cy', y.toFixed(2));
-        circle.setAttribute('r',  '5');
-        circle.setAttribute('fill', color);
-        circle.setAttribute('fill-opacity', '0.85');
-        circle.setAttribute('stroke', '#fff');
-        circle.setAttribute('stroke-width', '1');
-        const title = document.createElementNS(svgNS, 'title');
-        title.textContent = name;
-        circle.appendChild(title);
-        group.appendChild(circle);
-        if (includeLabels && labelText) labelCandidates.push({ text: labelText, anchorX: x, anchorY: y, isArea: false });
+        const dot = _makeDotShape(svgNS, x, y, dotR, dotShp);
+        dot.setAttribute('id', sid);
+        dot.setAttribute('fill', color);
+        dot.setAttribute('fill-opacity', '0.85');
+        dot.setAttribute('stroke', '#fff');
+        dot.setAttribute('stroke-width', selectionPass ? '1.5' : '1');
+        if (da) dot.setAttribute('stroke-dasharray', da);
+        const t = document.createElementNS(svgNS, 'title'); t.textContent = name; dot.appendChild(t);
+        group.appendChild(dot);
+        if (!selectionPass && includeLabels && labelText)
+          labelCandidates.push({ text: labelText, anchorX: x, anchorY: y, isArea: false, dotR });
+
       } else if (el.type === 'way' && el.geometry) {
-        const pts    = el.geometry.map(p => geoToSvg(p.lat, p.lon));
-        const pStr   = pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
-        const first  = pts[0], last = pts[pts.length - 1];
+        const pts   = el.geometry.map(p => geoToSvg(p.lat, p.lon));
+        const pStr  = pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+        const first = pts[0], last = pts[pts.length - 1];
         const closed = pts.length > 2 && Math.abs(first.x - last.x) < 0.5 && Math.abs(first.y - last.y) < 0.5;
         let shape;
         if (closed && isAreaEl(el.tags)) {
           shape = document.createElementNS(svgNS, 'polygon');
-          shape.setAttribute('points', pStr);
-          shape.setAttribute('fill', color);
-          shape.setAttribute('fill-opacity', '0.2');
-          shape.setAttribute('stroke', color);
-          shape.setAttribute('stroke-width', '1.5');
-          if (includeLabels && labelText) {
+          shape.setAttribute('points',       pStr);
+          shape.setAttribute('fill',         color);
+          shape.setAttribute('fill-opacity', selectionPass ? '0.35' : '0.2');
+          shape.setAttribute('stroke',       color);
+          shape.setAttribute('stroke-width', sw);
+          if (da) shape.setAttribute('stroke-dasharray', da);
+          if (!selectionPass && includeLabels && labelText) {
             const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-            const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-            const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-            labelCandidates.push({ text: labelText, anchorX: cx, anchorY: cy, isArea: true,
+            labelCandidates.push({ text: labelText,
+              anchorX: (Math.min(...xs) + Math.max(...xs)) / 2,
+              anchorY: (Math.min(...ys) + Math.max(...ys)) / 2,
+              isArea: true, dotR: 0,
               areaMinX: Math.min(...xs), areaMinY: Math.min(...ys),
               areaMaxX: Math.max(...xs), areaMaxY: Math.max(...ys) });
           }
         } else {
           shape = document.createElementNS(svgNS, 'polyline');
-          shape.setAttribute('points', pStr);
-          shape.setAttribute('fill', 'none');
-          shape.setAttribute('stroke', color);
-          shape.setAttribute('stroke-width', '2');
-          if (includeLabels && labelText) {
+          shape.setAttribute('points',       pStr);
+          shape.setAttribute('fill',         'none');
+          shape.setAttribute('stroke',       color);
+          shape.setAttribute('stroke-width', selectionPass ? sw + 1 : sw);
+          if (da) shape.setAttribute('stroke-dasharray', da);
+          if (!selectionPass && includeLabels && labelText) {
             const mid = pts[Math.floor(pts.length / 2)];
-            labelCandidates.push({ text: labelText, anchorX: mid.x, anchorY: mid.y, isArea: false });
+            labelCandidates.push({ text: labelText, anchorX: mid.x, anchorY: mid.y, isArea: false, dotR: 0 });
           }
         }
         shape.setAttribute('id', sid);
-        const title = document.createElementNS(svgNS, 'title');
-        title.textContent = name;
-        shape.appendChild(title);
+        const t = document.createElementNS(svgNS, 'title'); t.textContent = name; shape.appendChild(t);
         group.appendChild(shape);
+
       } else if (el.type === 'relation' && el.members) {
         const rg = document.createElementNS(svgNS, 'g');
         rg.setAttribute('id', sid);
@@ -1889,10 +2050,11 @@ async function doExportSvg() {
           const pts  = m.geometry.map(p => geoToSvg(p.lat, p.lon));
           const pStr = pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
           const line = document.createElementNS(svgNS, 'polyline');
-          line.setAttribute('points', pStr);
-          line.setAttribute('fill', 'none');
-          line.setAttribute('stroke', color);
-          line.setAttribute('stroke-width', '2');
+          line.setAttribute('points',       pStr);
+          line.setAttribute('fill',         'none');
+          line.setAttribute('stroke',       color);
+          line.setAttribute('stroke-width', selectionPass ? sw + 1 : sw);
+          if (da) line.setAttribute('stroke-dasharray', da);
           if (mi === 0) { const t = document.createElementNS(svgNS, 'title'); t.textContent = name; line.appendChild(t); }
           rg.appendChild(line);
         });
@@ -1900,50 +2062,59 @@ async function doExportSvg() {
       }
     });
 
-    svg.appendChild(group);
+    if (group.childNodes.length) svg.appendChild(group);
   }
 
-  S.queries.forEach((q, qi) => drawQueryToSvg(q, COLORS[qi % COLORS.length], `active-${qi}`));
+  const queryRows = _buildQueryRows();
 
-  Object.entries(S.shownSearches).forEach(([id, shown]) => {
-    (shown.queries || []).forEach((q, qi) => drawQueryToSvg(q, _colorForShownQuery(id, qi), `shown-${id}-${qi}`));
+  // First pass: non-selected elements
+  queryRows.forEach(({ q, key, color }) => {
+    const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true };
+    if (qs.visible !== false) drawQueryElements(q, qs, false);
   });
 
-  // Add text labels with overlap avoidance
+  // Second pass: selected elements rendered on top
+  if (S.selectedIds.size) {
+    queryRows.forEach(({ q, key, color }) => {
+      const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true };
+      if (qs.visible !== false) drawQueryElements(q, qs, true);
+    });
+  }
+
+  // Labels with overlap avoidance (also avoids drawing over other dots)
   if (includeLabels && labelCandidates.length) {
-    const FONT_SIZE  = 11;  // px
-    const LABEL_PAD  = 3;   // px gap between anchor and label
-    // 0.55× is a good average for Latin characters in proportional fonts;
-    // non-Latin scripts may be wider and could overflow their background rect
+    const FONT_SIZE = 11;
+    const LABEL_PAD = 3;
     const CHAR_WIDTH = FONT_SIZE * 0.55;
-    const LBL_H     = FONT_SIZE + 2;
+    const LBL_H = FONT_SIZE + 4;
 
     const labelGroup = document.createElementNS(svgNS, 'g');
     labelGroup.setAttribute('id', 'labels');
-    labelGroup.setAttribute('clip-path', 'url(#artboard-clip)');
 
-    // Occupied rectangles (already placed labels)
-    const occupied = [];
+    // Pre-occupy all dot positions so no label overlaps a dot
+    const occupied = labelCandidates
+      .filter(c => !c.isArea && c.dotR > 0)
+      .map(({ anchorX, anchorY, dotR }) => ({ x: anchorX - dotR, y: anchorY - dotR, w: dotR * 2, h: dotR * 2 }));
+
     function overlaps(r) { return occupied.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y); }
 
-    labelCandidates.forEach(({ text, anchorX, anchorY, isArea, areaMinX, areaMinY, areaMaxX, areaMaxY }) => {
+    labelCandidates.forEach(({ text, anchorX, anchorY, isArea, areaMinX, areaMinY, areaMaxX, areaMaxY, dotR }) => {
       if (anchorX < -20 || anchorX > W + 20 || anchorY < -20 || anchorY > H + 20) return;
       const w = text.length * CHAR_WIDTH + LABEL_PAD * 2;
       const h = LBL_H;
-      const DOT_R = 5;
+      const r = dotR || 5;
 
-      // Candidate positions: centre (for areas), then right/left/top/bottom (for points/lines)
       const candidates = isArea
         ? [
-            { x: anchorX - w / 2, y: anchorY - h / 2, tx: anchorX, ty: anchorY, anchor: 'middle' },
-            { x: anchorX - w / 2, y: areaMinY - h - LABEL_PAD, tx: anchorX, ty: areaMinY - LABEL_PAD, anchor: 'middle' },
-            { x: anchorX - w / 2, y: areaMaxY + LABEL_PAD, tx: anchorX, ty: areaMaxY + h + LABEL_PAD, anchor: 'middle' },
+            { x: anchorX - w / 2, y: anchorY - h / 2,             anchor: 'middle' },
+            { x: anchorX - w / 2, y: areaMinY - h - LABEL_PAD,    anchor: 'middle' },
+            { x: anchorX - w / 2, y: areaMaxY + LABEL_PAD,        anchor: 'middle' },
           ]
         : [
-            { x: anchorX + DOT_R + LABEL_PAD, y: anchorY - h / 2, tx: anchorX + DOT_R + LABEL_PAD, ty: anchorY + FONT_SIZE * 0.35, anchor: 'start' },
-            { x: anchorX - w - DOT_R - LABEL_PAD, y: anchorY - h / 2, tx: anchorX - DOT_R - LABEL_PAD, ty: anchorY + FONT_SIZE * 0.35, anchor: 'end' },
-            { x: anchorX - w / 2, y: anchorY - DOT_R - h - LABEL_PAD, tx: anchorX, ty: anchorY - DOT_R - LABEL_PAD, anchor: 'middle' },
-            { x: anchorX - w / 2, y: anchorY + DOT_R + LABEL_PAD, tx: anchorX, ty: anchorY + DOT_R + h, anchor: 'middle' },
+            { x: anchorX + r + LABEL_PAD,     y: anchorY - h / 2, anchor: 'start'  },
+            { x: anchorX - w - r - LABEL_PAD, y: anchorY - h / 2, anchor: 'end'    },
+            { x: anchorX - w / 2, y: anchorY - r - h - LABEL_PAD, anchor: 'middle' },
+            { x: anchorX - w / 2, y: anchorY + r + LABEL_PAD,     anchor: 'middle' },
           ];
 
       let placed = null;
@@ -1951,27 +2122,33 @@ async function doExportSvg() {
         const rect = { x: c.x, y: c.y, w, h };
         if (!overlaps(rect)) { placed = { ...c, rect }; break; }
       }
-      if (!placed) return; // skip if all positions are taken
-
+      if (!placed) return;
       occupied.push(placed.rect);
 
-      // White background for readability
+      // Background rect for readability
       const bg = document.createElementNS(svgNS, 'rect');
-      bg.setAttribute('x', placed.rect.x.toFixed(2));
-      bg.setAttribute('y', placed.rect.y.toFixed(2));
+      bg.setAttribute('x',      placed.rect.x.toFixed(2));
+      bg.setAttribute('y',      placed.rect.y.toFixed(2));
       bg.setAttribute('width',  placed.rect.w.toFixed(2));
       bg.setAttribute('height', placed.rect.h.toFixed(2));
-      bg.setAttribute('fill', 'rgba(255,255,255,0.75)');
-      bg.setAttribute('rx', '2');
+      bg.setAttribute('fill',   'rgba(255,255,255,0.82)');
+      bg.setAttribute('rx',     '2');
       labelGroup.appendChild(bg);
 
+      // Text x based on anchor direction; y at vertical centre of rect using dominant-baseline
+      let tx;
+      if (placed.anchor === 'start')      tx = placed.rect.x + LABEL_PAD;
+      else if (placed.anchor === 'end')   tx = placed.rect.x + placed.rect.w - LABEL_PAD;
+      else                                tx = placed.rect.x + placed.rect.w / 2;
+
       const txt = document.createElementNS(svgNS, 'text');
-      txt.setAttribute('x', placed.tx.toFixed(2));
-      txt.setAttribute('y', placed.ty.toFixed(2));
-      txt.setAttribute('text-anchor', placed.anchor);
-      txt.setAttribute('font-family', '-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif');
-      txt.setAttribute('font-size', String(FONT_SIZE));
-      txt.setAttribute('fill', '#111');
+      txt.setAttribute('x',                  tx.toFixed(2));
+      txt.setAttribute('y',                  (placed.rect.y + h / 2).toFixed(2));
+      txt.setAttribute('dominant-baseline',  'middle');
+      txt.setAttribute('text-anchor',        placed.anchor);
+      txt.setAttribute('font-family',        '"Inter",system-ui,-apple-system,sans-serif');
+      txt.setAttribute('font-size',          String(FONT_SIZE));
+      txt.setAttribute('fill',               '#111');
       txt.textContent = text;
       labelGroup.appendChild(txt);
     });
@@ -1979,10 +2156,7 @@ async function doExportSvg() {
     svg.appendChild(labelGroup);
   }
 
-  const serializer = new XMLSerializer();
-  const svgStr     = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(svg);
-  downloadBlob(svgStr, `overpass-ai-${Date.now()}.svg`, 'image/svg+xml;charset=utf-8;');
-  setStatus('SVG exported');
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg);
 }
 
 function sanitizeId(s) {
