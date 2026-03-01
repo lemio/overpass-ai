@@ -386,6 +386,7 @@
         <span style="font-size:11px;"><i class="fa-regular fa-image" style="margin-right:4px;"></i>SVG Export</span>
         <div class="results-header-btns">
           <button class="btn btn-sm btn-primary" id="doExportSvgBtn" style="width:auto;padding:3px 8px;" title="Download SVG"><i class="fa-solid fa-download"></i></button>
+          <button class="btn btn-sm btn-icon" id="copySvgBtn" title="Copy SVG to clipboard" aria-label="Copy SVG to clipboard"><i class="fa-regular fa-clipboard"></i></button>
           <button class="btn btn-sm btn-icon" id="closeSvgViewBtn" title="Back to Results"><i class="fa-solid fa-xmark"></i></button>
         </div>
       </div>
@@ -567,6 +568,7 @@ function bindEvents() {
 
   // SVG Export panel
   document.getElementById('doExportSvgBtn').addEventListener('click', doExportSvg);
+  document.getElementById('copySvgBtn').addEventListener('click', copySvgToClipboard);
   document.getElementById('closeSvgViewBtn').addEventListener('click', closeSvgView);
 
   // Share
@@ -1049,6 +1051,7 @@ function hlLayer(layer, type, on, color) {
   try {
     if (type === 'node') layer.setStyle({ weight: on ? STYLE.NODE_WEIGHT_HL : STYLE.NODE_WEIGHT, radius: on ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
     else layer.setStyle({ weight: on ? STYLE.LINE_WEIGHT_HL : STYLE.LINE_WEIGHT, opacity: on ? 1 : 0.8 });
+    if (on) { try { layer.bringToFront(); } catch(_) {} }
   } catch(_) {}
 }
 
@@ -1158,6 +1161,7 @@ function syncLayerStyles() {
         } else {
           layer.setStyle({ color: sel ? SEL_COLOR : color, weight: sel ? STYLE.LINE_WEIGHT_SEL : STYLE.LINE_WEIGHT, opacity: sel ? 1 : 0.8 });
         }
+        if (sel) { try { layer.bringToFront(); } catch(_) {} }
       } catch(_) {}
     });
   });
@@ -1337,6 +1341,7 @@ function renderQueryOutput(explanation, queries) {
   }
 
   document.getElementById('queryOutput').style.display = 'block';
+  refreshSvgPanelIfOpen();
 }
 
 function setActiveVariant(idx) {
@@ -1613,13 +1618,9 @@ const TILE_PROVIDERS = {
 };
 
 const svgExportState = {
-  globalStyle: 'areas',
   tileProvider: 'osm',
-  includeLabels: false,
-  labelField: 'name',
   queryStyles: {},
 };
-let _svgPreviewTimer = null;
 let _svgTileCache = null;
 let _svgTileCacheKey = '';
 
@@ -1650,21 +1651,24 @@ function closeSvgView() {
   document.getElementById('svgViewHeader').style.display = 'none';
   document.getElementById('resultsList').style.display = '';
   document.getElementById('svgPanelBody').style.display = 'none';
-  if (_svgPreviewTimer) { clearTimeout(_svgPreviewTimer); _svgPreviewTimer = null; }
+}
+
+function refreshSvgPanelIfOpen() {
+  if (document.getElementById('svgPanelBody').style.display !== 'none') {
+    if (getAllExportElements().length) openSvgExport();
+    else closeSvgView();
+  }
 }
 
 function openSvgExport() {
   const all = getAllExportElements();
   if (!all.length) { showError('No elements to export. Generate a query first.'); return; }
 
-  // Restore settings from localStorage
+  // Restore tile provider from localStorage
   try {
     const saved = JSON.parse(localStorage.getItem('svg_export_settings') || 'null');
     if (saved && typeof saved === 'object') {
-      if (['areas','dots'].includes(saved.style)) svgExportState.globalStyle = saved.style;
       if (TILE_PROVIDERS[saved.tileProvider]) svgExportState.tileProvider = saved.tileProvider;
-      if (typeof saved.labels === 'boolean') svgExportState.includeLabels = saved.labels;
-      if (typeof saved.labelField === 'string') svgExportState.labelField = saved.labelField;
     }
   } catch(_) {}
 
@@ -1678,23 +1682,17 @@ function openSvgExport() {
   const queryRows = _buildQueryRows();
   queryRows.forEach(({ key, color }) => {
     if (!svgExportState.queryStyles[key]) {
-      svgExportState.queryStyles[key] = { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true };
-    } else if (!svgExportState.queryStyles[key].color) {
-      svgExportState.queryStyles[key].color = color;
+      svgExportState.queryStyles[key] = { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name' };
+    } else {
+      if (!svgExportState.queryStyles[key].color) svgExportState.queryStyles[key].color = color;
+      if (svgExportState.queryStyles[key].labels === undefined) svgExportState.queryStyles[key].labels = false;
+      if (!svgExportState.queryStyles[key].labelField) svgExportState.queryStyles[key].labelField = 'name';
     }
   });
 
   // Build panel body
   const body = document.getElementById('svgPanelBody');
   body.innerHTML = '';
-
-  // Preview area
-  const previewWrap = document.createElement('div');
-  previewWrap.style.cssText = 'padding:10px 10px 0;flex-shrink:0;';
-  previewWrap.innerHTML = `<div class="label" style="margin-bottom:5px;">Preview</div>
-    <img id="svgPreviewImg" class="svg-preview-img" alt="SVG preview">
-    <div id="svgPreviewStatus" style="font-size:10px;color:var(--text-2);text-align:center;margin-top:3px;">Generating…</div>`;
-  body.appendChild(previewWrap);
 
   // Settings area
   const settings = document.createElement('div');
@@ -1705,89 +1703,69 @@ function openSvgExport() {
   _renderSvgSettings(settings, sortedTagKeys, queryRows);
   openSvgView();
   _svgTileCache = null;
-  scheduleSvgPreview();
 }
 
 function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
   const provOpts = Object.entries(TILE_PROVIDERS)
     .map(([k, p]) => `<option value="${esc(k)}"${svgExportState.tileProvider === k ? ' selected' : ''}>${esc(p.name)}</option>`)
     .join('');
-  const lblOpts = sortedTagKeys
-    .map(k => `<option value="${esc(k)}"${svgExportState.labelField === k ? ' selected' : ''}>${esc(k)}</option>`)
-    .join('');
 
-  let perQueryHtml = '';
-  if (queryRows.length > 1) {
-    perQueryHtml = `<div class="sep"></div><div class="label" style="margin-bottom:4px;">Per-Query Style</div>`;
-    queryRows.forEach(({ key, name, color }) => {
-      const qs = svgExportState.queryStyles[key] || {};
-      const c = qs.color || color;
-      perQueryHtml += `<div class="svg-qstyle-row" data-key="${esc(key)}">
-        <div class="svg-qstyle-header">
-          <input type="color" class="svg-color-input" value="${esc(c)}" data-field="color" title="Colour">
-          <span class="svg-qstyle-name" title="${esc(name)}">${esc(name)}</span>
-          <label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-1);cursor:pointer;flex-shrink:0;">
-            <input type="checkbox" data-field="visible"${qs.visible !== false ? ' checked' : ''}> Show
-          </label>
-        </div>
-        <div class="svg-qstyle-controls">
-          <div class="svg-qstyle-ctrl"><label>Style</label>
-            <select class="svg-qstyle-sel" data-field="queryStyle">
-              <option value="auto"${(qs.queryStyle||'auto')==='auto'?' selected':''}>Auto</option>
-              <option value="polygons"${qs.queryStyle==='polygons'?' selected':''}>Polygons</option>
-              <option value="dots"${qs.queryStyle==='dots'?' selected':''}>Dots</option>
-            </select></div>
-          <div class="svg-qstyle-ctrl"><label>Wt</label>
-            <input type="number" class="svg-qstyle-num" min="0.5" max="10" step="0.5" value="${qs.strokeWidth||2}" data-field="strokeWidth"></div>
-          <div class="svg-qstyle-ctrl"><label>Dash</label>
-            <select class="svg-qstyle-sel" data-field="dashArray">
-              <option value=""${!qs.dashArray?' selected':''}>&#x2014;</option>
-              <option value="6,4"${qs.dashArray==='6,4'?' selected':''}>- -</option>
-              <option value="2,4"${qs.dashArray==='2,4'?' selected':''}>&#xB7;&#xB7;&#xB7;</option>
-            </select></div>
-          <div class="svg-qstyle-ctrl"><label>Dot</label>
-            <select class="svg-qstyle-sel" data-field="dotShape">
-              <option value="circle"${(qs.dotShape||'circle')==='circle'?' selected':''}>&#x25CF;</option>
-              <option value="diamond"${qs.dotShape==='diamond'?' selected':''}>&#x25C6;</option>
-              <option value="square"${qs.dotShape==='square'?' selected':''}>&#x25A0;</option>
-            </select></div>
-          <div class="svg-qstyle-ctrl"><label>Sz</label>
-            <input type="number" class="svg-qstyle-num" min="2" max="20" step="1" value="${qs.dotSize||5}" data-field="dotSize"></div>
-        </div>
-      </div>`;
-    });
-  }
+  let perQueryHtml = `<div class="label" style="margin-bottom:4px;">Query Styles</div>`;
+  queryRows.forEach(({ key, name, color }) => {
+    const qs = svgExportState.queryStyles[key] || {};
+    const c = qs.color || color;
+    const lblOpts = sortedTagKeys
+      .map(k => `<option value="${esc(k)}"${(qs.labelField||'name') === k ? ' selected' : ''}>${esc(k)}</option>`)
+      .join('');
+    perQueryHtml += `<div class="svg-qstyle-row" data-key="${esc(key)}">
+      <div class="svg-qstyle-header">
+        <input type="color" class="svg-color-input" value="${esc(c)}" data-field="color" title="Colour">
+        <span class="svg-qstyle-name" title="${esc(name)}">${esc(name)}</span>
+        <label style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text-1);cursor:pointer;flex-shrink:0;">
+          <input type="checkbox" data-field="visible"${qs.visible !== false ? ' checked' : ''}> Show
+        </label>
+      </div>
+      <div class="svg-qstyle-controls">
+        <div class="svg-qstyle-ctrl"><label>Style</label>
+          <select class="svg-qstyle-sel" data-field="queryStyle">
+            <option value="auto"${(qs.queryStyle||'auto')==='auto'?' selected':''}>Auto</option>
+            <option value="polygons"${qs.queryStyle==='polygons'?' selected':''}>Polygons</option>
+            <option value="dots"${qs.queryStyle==='dots'?' selected':''}>Dots</option>
+          </select></div>
+        <div class="svg-qstyle-ctrl"><label>Wt</label>
+          <input type="number" class="svg-qstyle-num" min="0.5" max="10" step="0.5" value="${qs.strokeWidth||2}" data-field="strokeWidth"></div>
+        <div class="svg-qstyle-ctrl"><label>Dash</label>
+          <select class="svg-qstyle-sel" data-field="dashArray">
+            <option value=""${!qs.dashArray?' selected':''}>&#x2014;</option>
+            <option value="6,4"${qs.dashArray==='6,4'?' selected':''}>- -</option>
+            <option value="2,4"${qs.dashArray==='2,4'?' selected':''}>&#xB7;&#xB7;&#xB7;</option>
+          </select></div>
+        <div class="svg-qstyle-ctrl"><label>Dot</label>
+          <select class="svg-qstyle-sel" data-field="dotShape">
+            <option value="circle"${(qs.dotShape||'circle')==='circle'?' selected':''}>&#x25CF;</option>
+            <option value="diamond"${qs.dotShape==='diamond'?' selected':''}>&#x25C6;</option>
+            <option value="square"${qs.dotShape==='square'?' selected':''}>&#x25A0;</option>
+          </select></div>
+        <div class="svg-qstyle-ctrl"><label>Sz</label>
+          <input type="number" class="svg-qstyle-num" min="2" max="20" step="1" value="${qs.dotSize||5}" data-field="dotSize"></div>
+        <div class="svg-qstyle-ctrl"><label>Labels</label>
+          <input type="checkbox" data-field="labels"${qs.labels?' checked':''}></div>
+        <div class="svg-qstyle-ctrl svg-label-field-ctrl" style="${qs.labels?'':'display:none;'}">
+          <select class="svg-qstyle-sel" data-field="labelField">${lblOpts}</select></div>
+      </div>
+    </div>`;
+  });
 
   settings.innerHTML = `
-    <div class="form-group">
-      <label class="label">Default Style</label>
-      <label class="radio-row"><input type="radio" name="svgStylePanel" value="areas"${svgExportState.globalStyle==='areas'?' checked':''}> Polygons</label>
-      <label class="radio-row"><input type="radio" name="svgStylePanel" value="dots"${svgExportState.globalStyle==='dots'?' checked':''}> Dots (all as points)</label>
-    </div>
     <div class="form-group">
       <label class="label" for="svgTileProviderSel">Map Background</label>
       <select id="svgTileProviderSel">${provOpts}</select>
     </div>
-    <div class="form-group">
-      <label class="check-row"><input type="checkbox" id="svgLabelCheckPanel"${svgExportState.includeLabels?' checked':''}> Include labels</label>
-      <div id="svgLabelFieldGroupPanel" style="${svgExportState.includeLabels?'':'display:none;'}margin-top:6px;">
-        <label class="label" style="margin-bottom:3px;">Label field</label>
-        <select id="svgLabelFieldPanel" style="font-size:11px;padding:3px 6px;width:auto;">${lblOpts}</select>
-      </div>
-    </div>
     ${perQueryHtml}`;
 
   // Bind settings changes
-  settings.querySelectorAll('input[name="svgStylePanel"]').forEach(r =>
-    r.addEventListener('change', () => { svgExportState.globalStyle = r.value; scheduleSvgPreview(); }));
   settings.querySelector('#svgTileProviderSel').addEventListener('change', e => {
-    svgExportState.tileProvider = e.target.value; _svgTileCache = null; scheduleSvgPreview(); });
-  settings.querySelector('#svgLabelCheckPanel').addEventListener('change', e => {
-    svgExportState.includeLabels = e.target.checked;
-    settings.querySelector('#svgLabelFieldGroupPanel').style.display = e.target.checked ? '' : 'none';
-    scheduleSvgPreview(); });
-  settings.querySelector('#svgLabelFieldPanel').addEventListener('change', e => {
-    svgExportState.labelField = e.target.value; scheduleSvgPreview(); });
+    svgExportState.tileProvider = e.target.value; _svgTileCache = null; });
   settings.querySelectorAll('.svg-qstyle-row').forEach(row => {
     const key = row.dataset.key;
     row.querySelectorAll('[data-field]').forEach(input => {
@@ -1795,48 +1773,60 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
       input.addEventListener(input.type === 'color' ? 'input' : 'change', () => {
         if (!svgExportState.queryStyles[key]) svgExportState.queryStyles[key] = {};
         const qs = svgExportState.queryStyles[key];
-        if (field === 'visible') qs[field] = input.checked;
-        else if (field === 'strokeWidth' || field === 'dotSize') qs[field] = parseFloat(input.value) || (field === 'dotSize' ? 5 : 2);
-        else qs[field] = input.value;
-        scheduleSvgPreview();
+        if (field === 'visible') {
+          qs[field] = input.checked;
+          _applySvgVisibilityToMap(key, qs[field]);
+        } else if (field === 'labels') {
+          qs[field] = input.checked;
+          const ctrl = row.querySelector('.svg-label-field-ctrl');
+          if (ctrl) ctrl.style.display = input.checked ? '' : 'none';
+        } else if (field === 'color') {
+          qs[field] = input.value;
+          _applySvgColorToMap(key, input.value);
+        } else if (field === 'strokeWidth' || field === 'dotSize') {
+          qs[field] = parseFloat(input.value) || (field === 'dotSize' ? 5 : 2);
+        } else {
+          qs[field] = input.value;
+        }
       });
     });
   });
 }
 
-function scheduleSvgPreview() {
-  if (_svgPreviewTimer) clearTimeout(_svgPreviewTimer);
-  const statusEl = document.getElementById('svgPreviewStatus');
-  if (statusEl) statusEl.textContent = 'Generating…';
-  _svgPreviewTimer = setTimeout(updateSvgPreview, 400);
+function _applySvgColorToMap(key, color) {
+  const m = key.match(/^active-(\d+)$/);
+  if (!m) return;
+  const qi = parseInt(m[1]);
+  const q = S.queries[qi];
+  if (!q) return;
+  q.elementLayers?.forEach((layer, eid) => {
+    const el = q.elements.find(e => elId(e) === eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    try {
+      if (el.type === 'node') layer.setStyle({ fillColor: color });
+      else layer.setStyle({ color });
+    } catch(_) {}
+  });
+  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+    if (S.selectedIds.has(eid)) return;
+    try { poly.setStyle({ color, fillColor: color }); fallback.setStyle({ fillColor: color }); } catch(_) {}
+  });
 }
 
-async function updateSvgPreview() {
-  _svgPreviewTimer = null;
-  const imgEl = document.getElementById('svgPreviewImg');
-  const statusEl = document.getElementById('svgPreviewStatus');
-  if (!imgEl) return;
-  try {
-    const svgStr = await _generateSvgString();
-    const blob   = new Blob([svgStr], { type: 'image/svg+xml' });
-    const url    = URL.createObjectURL(blob);
-    if (imgEl.dataset.prevUrl) URL.revokeObjectURL(imgEl.dataset.prevUrl);
-    imgEl.dataset.prevUrl = url;
-    imgEl.src = url;
-    if (statusEl) statusEl.textContent = '';
-  } catch(e) {
-    if (statusEl) statusEl.textContent = 'Preview failed';
-    console.warn('SVG preview error:', e);
-  }
+function _applySvgVisibilityToMap(key, visible) {
+  const m = key.match(/^active-(\d+)$/);
+  if (!m) return;
+  const qi = parseInt(m[1]);
+  const q = S.queries[qi];
+  if (!q || !q.layerGroup) return;
+  if (visible) S.map.addLayer(q.layerGroup);
+  else S.map.removeLayer(q.layerGroup);
 }
 
 async function doExportSvg() {
   try {
     localStorage.setItem('svg_export_settings', JSON.stringify({
-      style: svgExportState.globalStyle,
       tileProvider: svgExportState.tileProvider,
-      labels: svgExportState.includeLabels,
-      labelField: svgExportState.labelField,
     }));
   } catch(_) {}
   setStatus('Generating SVG…');
@@ -1847,6 +1837,18 @@ async function doExportSvg() {
   } catch(e) {
     setStatus('SVG export failed');
     showError(`SVG export failed: ${e.message}`);
+  }
+}
+
+async function copySvgToClipboard() {
+  setStatus('Copying SVG…');
+  try {
+    const svgStr = await _generateSvgString();
+    await navigator.clipboard.writeText(svgStr);
+    setStatus('SVG copied to clipboard');
+  } catch(e) {
+    setStatus('Copy failed');
+    showError(`SVG copy failed: ${e.name === 'NotAllowedError' ? 'clipboard permission denied' : e.message}`);
   }
 }
 
@@ -1959,20 +1961,19 @@ async function _generateSvgString() {
     svg.appendChild(bg);
   }
 
-  const globalForceDots = svgExportState.globalStyle === 'dots';
-  const includeLabels   = svgExportState.includeLabels;
-  const labelField      = svgExportState.labelField || 'name';
   const labelCandidates = [];
 
   function drawQueryElements(q, qStyle, selectionPass) {
     if (!q.elements?.length) return;
     const override  = qStyle.queryStyle || 'auto';
-    const forceDots = override === 'dots' ? true : override === 'polygons' ? false : globalForceDots;
-    const color  = selectionPass ? SEL_COLOR : qStyle.color;
-    const sw     = qStyle.strokeWidth || 2;
-    const da     = qStyle.dashArray   || '';
-    const dotR   = qStyle.dotSize     || 5;
-    const dotShp = qStyle.dotShape    || 'circle';
+    const forceDots = override === 'dots';
+    const color     = selectionPass ? SEL_COLOR : qStyle.color;
+    const sw        = qStyle.strokeWidth || 2;
+    const da        = qStyle.dashArray   || '';
+    const dotR      = qStyle.dotSize     || 5;
+    const dotShp    = qStyle.dotShape    || 'circle';
+    const inclLabels = !selectionPass && (qStyle.labels || false);
+    const labelField = qStyle.labelField || 'name';
 
     const group = document.createElementNS(svgNS, 'g');
     group.setAttribute('id', sanitizeId(q.name) + (selectionPass ? '-sel' : ''));
@@ -2001,7 +2002,7 @@ async function _generateSvgString() {
         if (da) dot.setAttribute('stroke-dasharray', da);
         const t = document.createElementNS(svgNS, 'title'); t.textContent = name; dot.appendChild(t);
         group.appendChild(dot);
-        if (!selectionPass && includeLabels && labelText)
+        if (inclLabels && labelText)
           labelCandidates.push({ text: labelText, anchorX: x, anchorY: y, isArea: false, dotR });
 
       } else if (el.type === 'way' && el.geometry) {
@@ -2018,7 +2019,7 @@ async function _generateSvgString() {
           shape.setAttribute('stroke',       color);
           shape.setAttribute('stroke-width', sw);
           if (da) shape.setAttribute('stroke-dasharray', da);
-          if (!selectionPass && includeLabels && labelText) {
+          if (inclLabels && labelText) {
             const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
             labelCandidates.push({ text: labelText,
               anchorX: (Math.min(...xs) + Math.max(...xs)) / 2,
@@ -2034,7 +2035,7 @@ async function _generateSvgString() {
           shape.setAttribute('stroke',       color);
           shape.setAttribute('stroke-width', selectionPass ? sw + 1 : sw);
           if (da) shape.setAttribute('stroke-dasharray', da);
-          if (!selectionPass && includeLabels && labelText) {
+          if (inclLabels && labelText) {
             const mid = pts[Math.floor(pts.length / 2)];
             labelCandidates.push({ text: labelText, anchorX: mid.x, anchorY: mid.y, isArea: false, dotR: 0 });
           }
@@ -2069,24 +2070,27 @@ async function _generateSvgString() {
 
   // First pass: non-selected elements
   queryRows.forEach(({ q, key, color }) => {
-    const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true };
+    const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name' };
     if (qs.visible !== false) drawQueryElements(q, qs, false);
   });
 
   // Second pass: selected elements rendered on top
   if (S.selectedIds.size) {
     queryRows.forEach(({ q, key, color }) => {
-      const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true };
+      const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name' };
       if (qs.visible !== false) drawQueryElements(q, qs, true);
     });
   }
 
   // Labels with overlap avoidance (also avoids drawing over other dots)
-  if (includeLabels && labelCandidates.length) {
+  if (labelCandidates.length) {
     const FONT_SIZE = 11;
     const LABEL_PAD = 3;
     const CHAR_WIDTH = FONT_SIZE * 0.55;
     const LBL_H = FONT_SIZE + 4;
+    // Inter cap-height ≈ 0.73 × font-size; CAP_HALF is half of that, used to shift the
+    // text baseline so it renders visually centred in the box without dominant-baseline (Figma-compatible).
+    const CAP_HALF = FONT_SIZE * 0.365; // = FONT_SIZE × 0.73 / 2
 
     const labelGroup = document.createElementNS(svgNS, 'g');
     labelGroup.setAttribute('id', 'labels');
@@ -2098,6 +2102,7 @@ async function _generateSvgString() {
 
     function overlaps(r) { return occupied.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y); }
 
+    let labelIdx = 0;
     labelCandidates.forEach(({ text, anchorX, anchorY, isArea, areaMinX, areaMinY, areaMaxX, areaMaxY, dotR }) => {
       if (anchorX < -20 || anchorX > W + 20 || anchorY < -20 || anchorY > H + 20) return;
       const w = text.length * CHAR_WIDTH + LABEL_PAD * 2;
@@ -2125,7 +2130,11 @@ async function _generateSvgString() {
       if (!placed) return;
       occupied.push(placed.rect);
 
-      // Background rect for readability
+      // Group background rect + text together so they can be selected as a unit in Figma.
+      // Append labelIdx to ensure uniqueness when multiple elements share the same label text.
+      const labelItemGroup = document.createElementNS(svgNS, 'g');
+      labelItemGroup.setAttribute('id', sanitizeId(text) + '-' + labelIdx++);
+
       const bg = document.createElementNS(svgNS, 'rect');
       bg.setAttribute('x',      placed.rect.x.toFixed(2));
       bg.setAttribute('y',      placed.rect.y.toFixed(2));
@@ -2133,24 +2142,26 @@ async function _generateSvgString() {
       bg.setAttribute('height', placed.rect.h.toFixed(2));
       bg.setAttribute('fill',   'rgba(255,255,255,0.82)');
       bg.setAttribute('rx',     '2');
-      labelGroup.appendChild(bg);
+      labelItemGroup.appendChild(bg);
 
-      // Text x based on anchor direction; y at vertical centre of rect using dominant-baseline
+      // Text x based on anchor direction; y at baseline computed from box centre using
+      // Inter's cap-height ratio (~0.73) so it renders correctly in Figma (no dominant-baseline).
       let tx;
       if (placed.anchor === 'start')      tx = placed.rect.x + LABEL_PAD;
       else if (placed.anchor === 'end')   tx = placed.rect.x + placed.rect.w - LABEL_PAD;
       else                                tx = placed.rect.x + placed.rect.w / 2;
 
       const txt = document.createElementNS(svgNS, 'text');
-      txt.setAttribute('x',                  tx.toFixed(2));
-      txt.setAttribute('y',                  (placed.rect.y + h / 2).toFixed(2));
-      txt.setAttribute('dominant-baseline',  'middle');
-      txt.setAttribute('text-anchor',        placed.anchor);
-      txt.setAttribute('font-family',        '"Inter",system-ui,-apple-system,sans-serif');
-      txt.setAttribute('font-size',          String(FONT_SIZE));
-      txt.setAttribute('fill',               '#111');
+      txt.setAttribute('x',           tx.toFixed(2));
+      txt.setAttribute('y',           (placed.rect.y + h / 2 + CAP_HALF).toFixed(2));
+      txt.setAttribute('text-anchor', placed.anchor);
+      txt.setAttribute('font-family', '"Inter",system-ui,-apple-system,sans-serif');
+      txt.setAttribute('font-size',   String(FONT_SIZE));
+      txt.setAttribute('fill',        '#111');
       txt.textContent = text;
-      labelGroup.appendChild(txt);
+      labelItemGroup.appendChild(txt);
+
+      labelGroup.appendChild(labelItemGroup);
     });
 
     svg.appendChild(labelGroup);
