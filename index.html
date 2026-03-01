@@ -281,6 +281,8 @@
     .svg-color-input { width: 22px; height: 18px; border: 1px solid var(--border-mid); border-radius: 2px; padding: 1px; cursor: pointer; background: none; }
     .svg-qstyle-sel { font-size: 10px; padding: 1px 3px; background: var(--bg-2); color: var(--text-1); border: 1px solid var(--border); border-radius: 3px; }
     .svg-qstyle-num { width: 34px; font-size: 10px; padding: 1px 3px; background: var(--bg-3); color: var(--text-0); border: 1px solid var(--border-mid); border-radius: 3px; text-align: center; }
+    .map-label { background: none; border: none; }
+    .map-label span { background: rgba(20,20,20,.75); color: #fff; font-size: 11px; font-family: 'SF Mono','Consolas',monospace; padding: 1px 4px; border-radius: 3px; white-space: nowrap; pointer-events: none; position: relative; top: -18px; left: 6px; }
   </style>
 </head>
 <body>
@@ -470,6 +472,7 @@ const S = {
   apiKey: '',
   model: 'gpt-4o',
   map: null,
+  tileLayer: null,
   queries: [],      // [{name, description, overpassQL, tags, elements, layerGroup, elementLayers, areaFallbacks, visible}]
   selectedIds: new Set(),
   brush: { active: false, start: null, overlayEl: null, rectLayer: null },
@@ -509,7 +512,7 @@ function initMap() {
     }
   } catch(_) {}
   S.map = L.map('map', { center, zoom });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  S.tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
   }).addTo(S.map);
@@ -892,6 +895,7 @@ function extractOverpassError(html) {
 /* ── Map rendering ──────────────────────────────────────────────── */
 function renderOnMap(idx, elements) {
   if (S.queries[idx].layerGroup) S.map.removeLayer(S.queries[idx].layerGroup);
+  if (S.queries[idx].labelLayerGroup) { S.map.removeLayer(S.queries[idx].labelLayerGroup); S.queries[idx].labelLayerGroup = null; }
   const color   = COLORS[idx % COLORS.length];
   const lg      = L.layerGroup().addTo(S.map);
   const elLayers = new Map();
@@ -1057,7 +1061,10 @@ function hlLayer(layer, type, on, color) {
 }
 
 function clearAllLayers() {
-  S.queries.forEach(q => { if (q.layerGroup) S.map.removeLayer(q.layerGroup); });
+  S.queries.forEach(q => {
+    if (q.layerGroup) S.map.removeLayer(q.layerGroup);
+    if (q.labelLayerGroup) { S.map.removeLayer(q.labelLayerGroup); q.labelLayerGroup = null; }
+  });
   Object.values(S.shownSearches).forEach(shown => {
     shown.layerGroups.forEach(lg => { if (lg) S.map.removeLayer(lg); });
   });
@@ -1768,7 +1775,9 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
 
   // Bind settings changes
   settings.querySelector('#svgTileProviderSel').addEventListener('change', e => {
-    svgExportState.tileProvider = e.target.value; _svgTileCache = null; });
+    svgExportState.tileProvider = e.target.value; _svgTileCache = null;
+    _applyTileProviderToMap(e.target.value);
+  });
   settings.querySelectorAll('.svg-qstyle-row').forEach(row => {
     const key = row.dataset.key;
     row.querySelectorAll('[data-field]').forEach(input => {
@@ -1783,12 +1792,20 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
           qs[field] = input.checked;
           const ctrl = row.querySelector('.svg-label-field-ctrl');
           if (ctrl) ctrl.style.display = input.checked ? '' : 'none';
+          _applySvgLabelsToMap(key, qs.labels, qs.labelField || 'name');
+        } else if (field === 'labelField') {
+          qs[field] = input.value;
+          _applySvgLabelsToMap(key, qs.labels, qs.labelField);
         } else if (field === 'color') {
           qs[field] = input.value;
           _applySvgColorToMap(key, input.value);
         } else if (field === 'strokeWidth' || field === 'dotSize') {
           qs[field] = parseFloat(input.value) || (field === 'dotSize' ? 5 : 2);
           if (field === 'strokeWidth') _applySvgStrokeWidthToMap(key, qs[field]);
+          if (field === 'dotSize') _applySvgDotSizeToMap(key, qs[field]);
+        } else if (field === 'dashArray') {
+          qs[field] = input.value;
+          _applySvgDashArrayToMap(key, input.value);
         } else {
           qs[field] = input.value;
         }
@@ -1844,6 +1861,91 @@ function _applySvgStrokeWidthToMap(key, strokeWidth) {
     if (S.selectedIds.has(eid)) return;
     try { poly.setStyle({ weight: strokeWidth }); } catch(_) {}
   });
+}
+
+function _applySvgDashArrayToMap(key, dashArray) {
+  const m = key.match(/^active-(\d+)$/);
+  if (!m) return;
+  const qi = parseInt(m[1]);
+  const q = S.queries[qi];
+  if (!q) return;
+  q.elementLayers?.forEach((layer, eid) => {
+    const el = q.elements.find(e => elId(e) === eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    try {
+      if (el.type !== 'node') layer.setStyle({ dashArray: dashArray || null });
+    } catch(_) {}
+  });
+  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+    if (S.selectedIds.has(eid)) return;
+    try { poly.setStyle({ dashArray: dashArray || null }); } catch(_) {}
+  });
+}
+
+function _applySvgDotSizeToMap(key, dotSize) {
+  const m = key.match(/^active-(\d+)$/);
+  if (!m) return;
+  const qi = parseInt(m[1]);
+  const q = S.queries[qi];
+  if (!q) return;
+  q.elementLayers?.forEach((layer, eid) => {
+    const el = q.elements.find(e => elId(e) === eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    try {
+      if (el.type === 'node') layer.setStyle({ radius: dotSize });
+    } catch(_) {}
+  });
+  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+    if (S.selectedIds.has(eid)) return;
+    try { fallback.setStyle({ radius: dotSize }); } catch(_) {}
+  });
+}
+
+function _applySvgLabelsToMap(key, labels, labelField) {
+  const keyMatch = key.match(/^active-(\d+)$/);
+  if (!keyMatch) return;
+  const qi = parseInt(keyMatch[1]);
+  const q = S.queries[qi];
+  if (!q) return;
+  // Remove the existing label layer group for this query if present
+  if (q.labelLayerGroup) { S.map.removeLayer(q.labelLayerGroup); q.labelLayerGroup = null; }
+  if (!labels) return;
+  const lg = L.layerGroup().addTo(S.map);
+  (q.elements || []).forEach(el => {
+    const text = (el.tags || {})[labelField || 'name'];
+    if (!text) return;
+    let latlng = null;
+    if (el.type === 'node') {
+      latlng = [el.lat, el.lon];
+    } else if (el.type === 'way' && el.geometry && el.geometry.length) {
+      const mid = el.geometry[Math.floor(el.geometry.length / 2)];
+      latlng = [mid.lat, mid.lon];
+    } else if (el.type === 'relation' && el.members) {
+      const firstWay = el.members.find(mb => mb.type === 'way' && mb.geometry && mb.geometry.length);
+      if (firstWay) { const mid = firstWay.geometry[Math.floor(firstWay.geometry.length / 2)]; latlng = [mid.lat, mid.lon]; }
+    }
+    if (!latlng) return;
+    try {
+      L.marker(latlng, {
+        icon: L.divIcon({ className: 'map-label', html: `<span>${esc(text)}</span>`, iconAnchor: [0, 0] }),
+        interactive: false,
+        keyboard: false,
+      }).addTo(lg);
+    } catch(_) {}
+  });
+  q.labelLayerGroup = lg;
+}
+
+function _applyTileProviderToMap(providerKey) {
+  const provider = TILE_PROVIDERS[providerKey];
+  if (!provider) return;
+  if (S.tileLayer) { S.map.removeLayer(S.tileLayer); S.tileLayer = null; }
+  if (provider.leafletUrl) {
+    S.tileLayer = L.tileLayer(provider.leafletUrl, {
+      attribution: provider.attribution,
+      maxZoom: 19,
+    }).addTo(S.map);
+  }
 }
 
 async function doExportSvg() {
