@@ -281,8 +281,9 @@
     .svg-color-input { width: 22px; height: 18px; border: 1px solid var(--border-mid); border-radius: 2px; padding: 1px; cursor: pointer; background: none; }
     .svg-qstyle-sel { font-size: 10px; padding: 1px 3px; background: var(--bg-2); color: var(--text-1); border: 1px solid var(--border); border-radius: 3px; }
     .svg-qstyle-num { width: 34px; font-size: 10px; padding: 1px 3px; background: var(--bg-3); color: var(--text-0); border: 1px solid var(--border-mid); border-radius: 3px; text-align: center; }
-    .map-label { background: none; border: none; }
-    .map-label span { background: rgba(20,20,20,.75); color: #fff; font-size: 11px; font-family: 'SF Mono','Consolas',monospace; padding: 1px 4px; border-radius: 3px; white-space: nowrap; pointer-events: none; position: relative; top: -18px; left: 6px; }
+    .map-label { background: none; border: none; overflow: visible; }
+    /* font-size here is a fallback; the per-label inline style applied in _applySvgLabelsToMap takes precedence */
+    .map-label span { display: inline-block; background: rgba(20,20,20,.82); color: #fff; font-size: 11px; font-family: 'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif; padding: 2px 5px; border-radius: 2px; white-space: nowrap; pointer-events: none; transform: translate(6px,-50%); }
   </style>
 </head>
 <body>
@@ -1629,6 +1630,7 @@ const TILE_PROVIDERS = {
 
 const svgExportState = {
   tileProvider: 'osm',
+  tileZoomOffset: 0,
   queryStyles: {},
 };
 let _svgTileCache = null;
@@ -1679,6 +1681,7 @@ function openSvgExport() {
     const saved = JSON.parse(localStorage.getItem('svg_export_settings') || 'null');
     if (saved && typeof saved === 'object') {
       if (TILE_PROVIDERS[saved.tileProvider]) svgExportState.tileProvider = saved.tileProvider;
+      if (typeof saved.tileZoomOffset === 'number') svgExportState.tileZoomOffset = saved.tileZoomOffset;
     }
   } catch(_) {}
 
@@ -1692,11 +1695,12 @@ function openSvgExport() {
   const queryRows = _buildQueryRows();
   queryRows.forEach(({ key, color }) => {
     if (!svgExportState.queryStyles[key]) {
-      svgExportState.queryStyles[key] = { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name' };
+      svgExportState.queryStyles[key] = { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name', labelFontSize: 11 };
     } else {
       if (!svgExportState.queryStyles[key].color) svgExportState.queryStyles[key].color = color;
       if (svgExportState.queryStyles[key].labels === undefined) svgExportState.queryStyles[key].labels = false;
       if (!svgExportState.queryStyles[key].labelField) svgExportState.queryStyles[key].labelField = 'name';
+      if (svgExportState.queryStyles[key].labelFontSize === undefined) svgExportState.queryStyles[key].labelFontSize = 11;
     }
   });
 
@@ -1762,6 +1766,9 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
           <input type="checkbox" data-field="labels"${qs.labels?' checked':''}></div>
         <div class="svg-qstyle-ctrl svg-label-field-ctrl" style="${qs.labels?'':'display:none;'}">
           <select class="svg-qstyle-sel" data-field="labelField">${lblOpts}</select></div>
+        <div class="svg-qstyle-ctrl svg-label-field-ctrl" style="${qs.labels?'':'display:none;'}">
+          <label>Font</label>
+          <input type="number" class="svg-qstyle-num" min="6" max="48" step="1" value="${qs.labelFontSize||11}" data-field="labelFontSize"></div>
       </div>
     </div>`;
   });
@@ -1771,12 +1778,19 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
       <label class="label" for="svgTileProviderSel">Map Background</label>
       <select id="svgTileProviderSel">${provOpts}</select>
     </div>
+    <div class="form-group" style="display:flex;align-items:center;gap:8px;">
+      <label class="label" for="svgTileZoomOffsetInp" style="margin-bottom:0;white-space:nowrap;">Tile Detail (+/−)</label>
+      <input type="number" id="svgTileZoomOffsetInp" min="-3" max="3" step="1" value="${svgExportState.tileZoomOffset}" style="width:52px;flex-shrink:0;">
+    </div>
     ${perQueryHtml}`;
 
   // Bind settings changes
   settings.querySelector('#svgTileProviderSel').addEventListener('change', e => {
     svgExportState.tileProvider = e.target.value; _svgTileCache = null;
     _applyTileProviderToMap(e.target.value);
+  });
+  settings.querySelector('#svgTileZoomOffsetInp').addEventListener('change', e => {
+    svgExportState.tileZoomOffset = parseInt(e.target.value) || 0; _svgTileCache = null;
   });
   settings.querySelectorAll('.svg-qstyle-row').forEach(row => {
     const key = row.dataset.key;
@@ -1790,12 +1804,14 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
           _applySvgVisibilityToMap(key, qs[field]);
         } else if (field === 'labels') {
           qs[field] = input.checked;
-          const ctrl = row.querySelector('.svg-label-field-ctrl');
-          if (ctrl) ctrl.style.display = input.checked ? '' : 'none';
-          _applySvgLabelsToMap(key, qs.labels, qs.labelField || 'name');
+          row.querySelectorAll('.svg-label-field-ctrl').forEach(c => { c.style.display = input.checked ? '' : 'none'; });
+          _applySvgLabelsToMap(key, qs.labels, qs.labelField || 'name', qs.labelFontSize || 11);
         } else if (field === 'labelField') {
           qs[field] = input.value;
-          _applySvgLabelsToMap(key, qs.labels, qs.labelField);
+          _applySvgLabelsToMap(key, qs.labels, qs.labelField, qs.labelFontSize || 11);
+        } else if (field === 'labelFontSize') {
+          qs[field] = parseInt(input.value) || 11;
+          _applySvgLabelsToMap(key, qs.labels, qs.labelField || 'name', qs.labelFontSize);
         } else if (field === 'color') {
           qs[field] = input.value;
           _applySvgColorToMap(key, input.value);
@@ -1901,7 +1917,7 @@ function _applySvgDotSizeToMap(key, dotSize) {
   });
 }
 
-function _applySvgLabelsToMap(key, labels, labelField) {
+function _applySvgLabelsToMap(key, labels, labelField, fontSize) {
   const keyMatch = key.match(/^active-(\d+)$/);
   if (!keyMatch) return;
   const qi = parseInt(keyMatch[1]);
@@ -1910,6 +1926,7 @@ function _applySvgLabelsToMap(key, labels, labelField) {
   // Remove the existing label layer group for this query if present
   if (q.labelLayerGroup) { S.map.removeLayer(q.labelLayerGroup); q.labelLayerGroup = null; }
   if (!labels) return;
+  const fs = (Number.isFinite(fontSize) && fontSize > 0) ? fontSize : 11;
   const lg = L.layerGroup().addTo(S.map);
   (q.elements || []).forEach(el => {
     const text = (el.tags || {})[labelField || 'name'];
@@ -1927,7 +1944,7 @@ function _applySvgLabelsToMap(key, labels, labelField) {
     if (!latlng) return;
     try {
       L.marker(latlng, {
-        icon: L.divIcon({ className: 'map-label', html: `<span>${esc(text)}</span>`, iconAnchor: [0, 0] }),
+        icon: L.divIcon({ className: 'map-label', html: `<span style="font-size:${fs}px">${esc(text)}</span>`, iconSize: [0, 0], iconAnchor: [0, 0] }),
         interactive: false,
         keyboard: false,
       }).addTo(lg);
@@ -1952,6 +1969,7 @@ async function doExportSvg() {
   try {
     localStorage.setItem('svg_export_settings', JSON.stringify({
       tileProvider: svgExportState.tileProvider,
+      tileZoomOffset: svgExportState.tileZoomOffset,
     }));
   } catch(_) {}
   setStatus('Generating SVG…');
@@ -1977,12 +1995,14 @@ async function copySvgToClipboard() {
   }
 }
 
-async function _getSvgTiles(b, zoom, W, H, originX, originY, scale) {
+async function _getSvgTiles(b, zoom, tileZoom, W, H, originX, originY, scale) {
   const provider = TILE_PROVIDERS[svgExportState.tileProvider];
   if (!provider || !provider.url) return [];
-  const tileZ    = Math.round(zoom);
+  const tileZ    = Math.max(0, Math.min(19, Math.round(tileZoom))); // 0–19 is the valid OSM tile zoom range
   const TILE_SIZE = 256;
   const n        = Math.pow(2, tileZ);
+  // Scale factor to convert tile-zoom pixel coordinates to map-zoom pixel coordinates
+  const zf       = Math.pow(2, zoom - tileZ);
   function latToTileY(lat) { return Math.floor((1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * n); }
   function lonToTileX(lon) { return Math.floor((lon + 180) / 360 * n); }
   const x0 = lonToTileX(b.getWest()), x1 = lonToTileX(b.getEast());
@@ -1991,9 +2011,9 @@ async function _getSvgTiles(b, zoom, W, H, originX, originY, scale) {
   for (let tx = x0; tx <= x1; tx++) {
     for (let ty = y0; ty <= y1; ty++) {
       const url = provider.url(tileZ, tx, ty);
-      const px  = (tx * TILE_SIZE - originX) * scale;
-      const py  = (ty * TILE_SIZE - originY) * scale;
-      const tw  = TILE_SIZE * scale;
+      const px  = (tx * TILE_SIZE * zf - originX) * scale;
+      const py  = (ty * TILE_SIZE * zf - originY) * scale;
+      const tw  = TILE_SIZE * zf * scale;
       tiles.push({ url, px, py, tw });
     }
   }
@@ -2065,7 +2085,7 @@ async function _generateSvgString() {
   svg.appendChild(defs);
 
   // Tile background
-  const tileImgs = await _getSvgTiles(b, zoom, W, H, originX, originY, scale);
+  const tileImgs = await _getSvgTiles(b, zoom, zoom + svgExportState.tileZoomOffset, W, H, originX, originY, scale);
   if (tileImgs.length) {
     const bgGroup = document.createElementNS(svgNS, 'g');
     bgGroup.setAttribute('id', 'map-tiles');
@@ -2099,6 +2119,7 @@ async function _generateSvgString() {
     const dotShp    = qStyle.dotShape    || 'circle';
     const inclLabels = !selectionPass && (qStyle.labels || false);
     const labelField = qStyle.labelField || 'name';
+    const labelFontSize = qStyle.labelFontSize || 11;
 
     const group = document.createElementNS(svgNS, 'g');
     group.setAttribute('id', sanitizeId(q.name) + (selectionPass ? '-sel' : ''));
@@ -2128,7 +2149,7 @@ async function _generateSvgString() {
         const t = document.createElementNS(svgNS, 'title'); t.textContent = name; dot.appendChild(t);
         group.appendChild(dot);
         if (inclLabels && labelText)
-          labelCandidates.push({ text: labelText, anchorX: x, anchorY: y, isArea: false, dotR });
+          labelCandidates.push({ text: labelText, anchorX: x, anchorY: y, isArea: false, dotR, fontSize: labelFontSize });
 
       } else if (el.type === 'way' && el.geometry) {
         const pts   = el.geometry.map(p => geoToSvg(p.lat, p.lon));
@@ -2151,7 +2172,7 @@ async function _generateSvgString() {
               anchorY: (Math.min(...ys) + Math.max(...ys)) / 2,
               isArea: true, dotR: 0,
               areaMinX: Math.min(...xs), areaMinY: Math.min(...ys),
-              areaMaxX: Math.max(...xs), areaMaxY: Math.max(...ys) });
+              areaMaxX: Math.max(...xs), areaMaxY: Math.max(...ys), fontSize: labelFontSize });
           }
         } else {
           shape = document.createElementNS(svgNS, 'polyline');
@@ -2162,7 +2183,7 @@ async function _generateSvgString() {
           if (da) shape.setAttribute('stroke-dasharray', da);
           if (inclLabels && labelText) {
             const mid = pts[Math.floor(pts.length / 2)];
-            labelCandidates.push({ text: labelText, anchorX: mid.x, anchorY: mid.y, isArea: false, dotR: 0 });
+            labelCandidates.push({ text: labelText, anchorX: mid.x, anchorY: mid.y, isArea: false, dotR: 0, fontSize: labelFontSize });
           }
         }
         shape.setAttribute('id', sid);
@@ -2209,13 +2230,7 @@ async function _generateSvgString() {
 
   // Labels with overlap avoidance (also avoids drawing over other dots)
   if (labelCandidates.length) {
-    const FONT_SIZE = 11;
     const LABEL_PAD = 3;
-    const CHAR_WIDTH = FONT_SIZE * 0.55;
-    const LBL_H = FONT_SIZE + 4;
-    // Inter cap-height ≈ 0.73 × font-size; CAP_HALF is half of that, used to shift the
-    // text baseline so it renders visually centred in the box without dominant-baseline (Figma-compatible).
-    const CAP_HALF = FONT_SIZE * 0.365; // = FONT_SIZE × 0.73 / 2
 
     const labelGroup = document.createElementNS(svgNS, 'g');
     labelGroup.setAttribute('id', 'labels');
@@ -2228,32 +2243,47 @@ async function _generateSvgString() {
     function overlaps(r) { return occupied.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y); }
 
     let labelIdx = 0;
-    labelCandidates.forEach(({ text, anchorX, anchorY, isArea, areaMinX, areaMinY, areaMaxX, areaMaxY, dotR }) => {
+    labelCandidates.forEach(({ text, anchorX, anchorY, isArea, areaMinX, areaMinY, areaMaxX, areaMaxY, dotR, fontSize }) => {
       if (anchorX < -20 || anchorX > W + 20 || anchorY < -20 || anchorY > H + 20) return;
-      const w = text.length * CHAR_WIDTH + LABEL_PAD * 2;
+      const FS = fontSize || 11;
+      // Approximate width used only for placement / overlap-avoidance
+      const CHAR_WIDTH = FS * 0.55;
+      const LBL_H = FS + 4;
+      const approxW = text.length * CHAR_WIDTH + LABEL_PAD * 2;
       const h = LBL_H;
       const r = dotR || 5;
 
       const candidates = isArea
         ? [
-            { x: anchorX - w / 2, y: anchorY - h / 2,             anchor: 'middle' },
-            { x: anchorX - w / 2, y: areaMinY - h - LABEL_PAD,    anchor: 'middle' },
-            { x: anchorX - w / 2, y: areaMaxY + LABEL_PAD,        anchor: 'middle' },
+            { x: anchorX - approxW / 2, y: anchorY - h / 2,             anchor: 'middle' },
+            { x: anchorX - approxW / 2, y: areaMinY - h - LABEL_PAD,    anchor: 'middle' },
+            { x: anchorX - approxW / 2, y: areaMaxY + LABEL_PAD,        anchor: 'middle' },
           ]
         : [
-            { x: anchorX + r + LABEL_PAD,     y: anchorY - h / 2, anchor: 'start'  },
-            { x: anchorX - w - r - LABEL_PAD, y: anchorY - h / 2, anchor: 'end'    },
-            { x: anchorX - w / 2, y: anchorY - r - h - LABEL_PAD, anchor: 'middle' },
-            { x: anchorX - w / 2, y: anchorY + r + LABEL_PAD,     anchor: 'middle' },
+            { x: anchorX + r + LABEL_PAD,             y: anchorY - h / 2, anchor: 'start'  },
+            { x: anchorX - approxW - r - LABEL_PAD,   y: anchorY - h / 2, anchor: 'end'    },
+            { x: anchorX - approxW / 2, y: anchorY - r - h - LABEL_PAD,  anchor: 'middle' },
+            { x: anchorX - approxW / 2, y: anchorY + r + LABEL_PAD,      anchor: 'middle' },
           ];
 
       let placed = null;
       for (const c of candidates) {
-        const rect = { x: c.x, y: c.y, w, h };
+        const rect = { x: c.x, y: c.y, w: approxW, h };
         if (!overlaps(rect)) { placed = { ...c, rect }; break; }
       }
       if (!placed) return;
       occupied.push(placed.rect);
+
+      // Measure the actual rendered text width for the background rect.
+      // getComputedTextLength() is accurate; approxW was only used for placement above.
+      const actualTextW = _measureSvgTextWidth(text, FS);
+      const actualW = actualTextW + LABEL_PAD * 2;
+
+      // Recompute the rect's x using the accurate width so the background fits the text exactly.
+      let bgX;
+      if (placed.anchor === 'start')      bgX = anchorX + r + LABEL_PAD;
+      else if (placed.anchor === 'end')   bgX = anchorX - actualW - r - LABEL_PAD;
+      else                                bgX = anchorX - actualW / 2;
 
       // Group background rect + text together so they can be selected as a unit in Figma.
       // Append labelIdx to ensure uniqueness when multiple elements share the same label text.
@@ -2261,27 +2291,28 @@ async function _generateSvgString() {
       labelItemGroup.setAttribute('id', sanitizeId(text) + '-' + labelIdx++);
 
       const bg = document.createElementNS(svgNS, 'rect');
-      bg.setAttribute('x',      placed.rect.x.toFixed(2));
+      bg.setAttribute('x',      bgX.toFixed(2));
       bg.setAttribute('y',      placed.rect.y.toFixed(2));
-      bg.setAttribute('width',  placed.rect.w.toFixed(2));
-      bg.setAttribute('height', placed.rect.h.toFixed(2));
+      bg.setAttribute('width',  actualW.toFixed(2));
+      bg.setAttribute('height', h.toFixed(2));
       bg.setAttribute('fill',   'rgba(255,255,255,0.82)');
       bg.setAttribute('rx',     '2');
       labelItemGroup.appendChild(bg);
 
       // Text x based on anchor direction; y at baseline computed from box centre using
       // Inter's cap-height ratio (~0.73) so it renders correctly in Figma (no dominant-baseline).
+      const CAP_HALF = FS * 0.365; // = FS × 0.73 / 2
       let tx;
-      if (placed.anchor === 'start')      tx = placed.rect.x + LABEL_PAD;
-      else if (placed.anchor === 'end')   tx = placed.rect.x + placed.rect.w - LABEL_PAD;
-      else                                tx = placed.rect.x + placed.rect.w / 2;
+      if (placed.anchor === 'start')      tx = bgX + LABEL_PAD;
+      else if (placed.anchor === 'end')   tx = bgX + actualW - LABEL_PAD;
+      else                                tx = bgX + actualW / 2;
 
       const txt = document.createElementNS(svgNS, 'text');
       txt.setAttribute('x',           tx.toFixed(2));
       txt.setAttribute('y',           (placed.rect.y + h / 2 + CAP_HALF).toFixed(2));
       txt.setAttribute('text-anchor', placed.anchor);
       txt.setAttribute('font-family', '"Inter",system-ui,-apple-system,sans-serif');
-      txt.setAttribute('font-size',   String(FONT_SIZE));
+      txt.setAttribute('font-size',   String(FS));
       txt.setAttribute('fill',        '#111');
       txt.textContent = text;
       labelItemGroup.appendChild(txt);
@@ -2293,6 +2324,28 @@ async function _generateSvgString() {
   }
 
   return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg);
+}
+
+/* ── SVG text measurement using getComputedTextLength() ─────────── */
+function _measureSvgTextWidth(text, fontSize) {
+  const svgNS = 'http://www.w3.org/2000/svg';
+  let ruler = document.getElementById('_svg_text_ruler');
+  if (!ruler) {
+    ruler = document.createElementNS(svgNS, 'svg');
+    ruler.setAttribute('id', '_svg_text_ruler');
+    ruler.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;top:-9999px;left:-9999px;width:1px;height:1px;overflow:visible;';
+    document.body.appendChild(ruler);
+  }
+  const txt = document.createElementNS(svgNS, 'text');
+  txt.setAttribute('font-family', '"Inter",system-ui,-apple-system,sans-serif');
+  txt.setAttribute('font-size', String(fontSize));
+  txt.textContent = text;
+  ruler.appendChild(txt);
+  const w = txt.getComputedTextLength();
+  ruler.removeChild(txt);
+  // Fall back to an approximation (0.55 × fontSize per character) if the browser
+  // returns 0 (e.g. font not yet loaded or element not yet laid out).
+  return w || text.length * fontSize * 0.55;
 }
 
 function sanitizeId(s) {
