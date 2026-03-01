@@ -281,6 +281,8 @@
     .svg-color-input { width: 22px; height: 18px; border: 1px solid var(--border-mid); border-radius: 2px; padding: 1px; cursor: pointer; background: none; }
     .svg-qstyle-sel { font-size: 10px; padding: 1px 3px; background: var(--bg-2); color: var(--text-1); border: 1px solid var(--border); border-radius: 3px; }
     .svg-qstyle-num { width: 34px; font-size: 10px; padding: 1px 3px; background: var(--bg-3); color: var(--text-0); border: 1px solid var(--border-mid); border-radius: 3px; text-align: center; }
+    .map-label { background: none; border: none; }
+    .map-label span { background: rgba(20,20,20,.75); color: #fff; font-size: 11px; font-family: 'SF Mono','Consolas',monospace; padding: 1px 4px; border-radius: 3px; white-space: nowrap; pointer-events: none; position: relative; top: -18px; left: 6px; }
   </style>
 </head>
 <body>
@@ -361,7 +363,7 @@
         <div class="results-header-btns">
           <button class="btn btn-sm btn-icon" id="exportCsvBtn" title="Export CSV"><i class="fa-solid fa-file-csv"></i></button>
           <button class="btn btn-sm btn-icon" id="exportGpxBtn" title="Export GPX"><i class="fa-solid fa-file-export"></i></button>
-          <button class="btn btn-sm btn-icon" id="exportSvgBtn" title="Export SVG"><i class="fa-regular fa-image"></i></button>
+          <button class="btn btn-sm btn-icon" id="styleBtn" title="Style"><i class="fa-solid fa-palette"></i></button>
         </div>
       </div>
       <!-- CSV view header (hidden by default) -->
@@ -383,7 +385,7 @@
       <div class="csv-field-list" id="csvFieldList" style="display:none;"></div>
       <!-- SVG view header (hidden by default) -->
       <div class="panel-header" id="svgViewHeader" style="display:none;">
-        <span style="font-size:11px;"><i class="fa-regular fa-image" style="margin-right:4px;"></i>SVG Export</span>
+        <span style="font-size:11px;"><i class="fa-solid fa-palette" style="margin-right:4px;"></i>Style</span>
         <div class="results-header-btns">
           <button class="btn btn-sm btn-primary" id="doExportSvgBtn" style="width:auto;padding:3px 8px;" title="Download SVG"><i class="fa-solid fa-download"></i></button>
           <button class="btn btn-sm btn-icon" id="copySvgBtn" title="Copy SVG to clipboard" aria-label="Copy SVG to clipboard"><i class="fa-regular fa-clipboard"></i></button>
@@ -470,6 +472,7 @@ const S = {
   apiKey: '',
   model: 'gpt-4o',
   map: null,
+  tileLayer: null,
   queries: [],      // [{name, description, overpassQL, tags, elements, layerGroup, elementLayers, areaFallbacks, visible}]
   selectedIds: new Set(),
   brush: { active: false, start: null, overlayEl: null, rectLayer: null },
@@ -509,7 +512,7 @@ function initMap() {
     }
   } catch(_) {}
   S.map = L.map('map', { center, zoom });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  S.tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
   }).addTo(S.map);
@@ -554,7 +557,7 @@ function bindEvents() {
   // Export
   document.getElementById('exportGpxBtn').addEventListener('click', exportGPX);
   document.getElementById('exportCsvBtn').addEventListener('click', openCsvExport);
-  document.getElementById('exportSvgBtn').addEventListener('click', openSvgExport);
+  document.getElementById('styleBtn').addEventListener('click', openSvgExport);
 
   // CSV Export panel (side panel)
   document.getElementById('closeCsvViewBtn').addEventListener('click', closeCsvView);
@@ -892,6 +895,7 @@ function extractOverpassError(html) {
 /* ── Map rendering ──────────────────────────────────────────────── */
 function renderOnMap(idx, elements) {
   if (S.queries[idx].layerGroup) S.map.removeLayer(S.queries[idx].layerGroup);
+  if (S.queries[idx].labelLayerGroup) { S.map.removeLayer(S.queries[idx].labelLayerGroup); S.queries[idx].labelLayerGroup = null; }
   const color   = COLORS[idx % COLORS.length];
   const lg      = L.layerGroup().addTo(S.map);
   const elLayers = new Map();
@@ -980,7 +984,8 @@ function _applyAreaDots() {
   const currentZoom = S.map.getZoom();
   S.queries.forEach((q, qi) => {
     if (!q.areaFallbacks || !q.areaFallbacks.length) return;
-    const color = COLORS[qi % COLORS.length];
+    const qs = svgExportState.queryStyles[`active-${qi}`];
+    const color = (qs && qs.color) ? qs.color : COLORS[qi % COLORS.length];
     q.areaFallbacks.forEach(({ poly, fallback, eid, thresholdZoom }) => {
       try {
         let tooSmall;
@@ -1056,7 +1061,10 @@ function hlLayer(layer, type, on, color) {
 }
 
 function clearAllLayers() {
-  S.queries.forEach(q => { if (q.layerGroup) S.map.removeLayer(q.layerGroup); });
+  S.queries.forEach(q => {
+    if (q.layerGroup) S.map.removeLayer(q.layerGroup);
+    if (q.labelLayerGroup) { S.map.removeLayer(q.labelLayerGroup); q.labelLayerGroup = null; }
+  });
   Object.values(S.shownSearches).forEach(shown => {
     shown.layerGroups.forEach(lg => { if (lg) S.map.removeLayer(lg); });
   });
@@ -1150,7 +1158,9 @@ function clearSelection() {
 
 function syncLayerStyles() {
   S.queries.forEach((q, qi) => {
-    const color = COLORS[qi % COLORS.length];
+    const qs = svgExportState.queryStyles[`active-${qi}`];
+    const color = (qs && qs.color) ? qs.color : COLORS[qi % COLORS.length];
+    const lineW = (qs && qs.strokeWidth) ? qs.strokeWidth : STYLE.LINE_WEIGHT;
     q.elementLayers?.forEach((layer, eid) => {
       const el  = q.elements.find(e => elId(e) === eid);
       if (!el) return;
@@ -1159,7 +1169,7 @@ function syncLayerStyles() {
         if (el.type === 'node') {
           layer.setStyle({ fillColor: sel ? SEL_COLOR : color, color: sel ? color : '#fff', weight: sel ? STYLE.NODE_WEIGHT_SEL : STYLE.NODE_WEIGHT, radius: sel ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
         } else {
-          layer.setStyle({ color: sel ? SEL_COLOR : color, weight: sel ? STYLE.LINE_WEIGHT_SEL : STYLE.LINE_WEIGHT, opacity: sel ? 1 : 0.8 });
+          layer.setStyle({ color: sel ? SEL_COLOR : color, weight: sel ? STYLE.LINE_WEIGHT_SEL : lineW, opacity: sel ? 1 : 0.8 });
         }
         if (sel) { try { layer.bringToFront(); } catch(_) {} }
       } catch(_) {}
@@ -1610,11 +1620,11 @@ function selectByTagValue(key, value, clickedChip) {
 /* ── SVG export ─────────────────────────────────────── */
 
 const TILE_PROVIDERS = {
-  osm:        { name: 'OSM Standard',    url: (z,x,y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png` },
-  hot:        { name: 'OSM HOT',          url: (z,x,y) => `https://a.tile.openstreetmap.fr/hot/${z}/${x}/${y}.png` },
-  cartoLight: { name: 'CartoDB Light',   url: (z,x,y) => `https://a.basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png` },
-  cartoDark:  { name: 'CartoDB Dark',    url: (z,x,y) => `https://a.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png` },
-  none:       { name: 'No tiles',        url: null },
+  osm:        { name: 'OSM Standard',   url: (z,x,y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,                 leafletUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' },
+  hot:        { name: 'OSM HOT',         url: (z,x,y) => `https://a.tile.openstreetmap.fr/hot/${z}/${x}/${y}.png`,            leafletUrl: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',                  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Tiles by HOT' },
+  cartoLight: { name: 'CartoDB Light',  url: (z,x,y) => `https://a.basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png`,      leafletUrl: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+  cartoDark:  { name: 'CartoDB Dark',   url: (z,x,y) => `https://a.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png`,       leafletUrl: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+  none:       { name: 'No tiles',       url: null,                                                                             leafletUrl: null,                                                                      attribution: '' },
 };
 
 const svgExportState = {
@@ -1765,7 +1775,9 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
 
   // Bind settings changes
   settings.querySelector('#svgTileProviderSel').addEventListener('change', e => {
-    svgExportState.tileProvider = e.target.value; _svgTileCache = null; });
+    svgExportState.tileProvider = e.target.value; _svgTileCache = null;
+    _applyTileProviderToMap(e.target.value);
+  });
   settings.querySelectorAll('.svg-qstyle-row').forEach(row => {
     const key = row.dataset.key;
     row.querySelectorAll('[data-field]').forEach(input => {
@@ -1780,11 +1792,20 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
           qs[field] = input.checked;
           const ctrl = row.querySelector('.svg-label-field-ctrl');
           if (ctrl) ctrl.style.display = input.checked ? '' : 'none';
+          _applySvgLabelsToMap(key, qs.labels, qs.labelField || 'name');
+        } else if (field === 'labelField') {
+          qs[field] = input.value;
+          _applySvgLabelsToMap(key, qs.labels, qs.labelField);
         } else if (field === 'color') {
           qs[field] = input.value;
           _applySvgColorToMap(key, input.value);
         } else if (field === 'strokeWidth' || field === 'dotSize') {
           qs[field] = parseFloat(input.value) || (field === 'dotSize' ? 5 : 2);
+          if (field === 'strokeWidth') _applySvgStrokeWidthToMap(key, qs[field]);
+          if (field === 'dotSize') _applySvgDotSizeToMap(key, qs[field]);
+        } else if (field === 'dashArray') {
+          qs[field] = input.value;
+          _applySvgDashArrayToMap(key, input.value);
         } else {
           qs[field] = input.value;
         }
@@ -1821,6 +1842,110 @@ function _applySvgVisibilityToMap(key, visible) {
   if (!q || !q.layerGroup) return;
   if (visible) S.map.addLayer(q.layerGroup);
   else S.map.removeLayer(q.layerGroup);
+}
+
+function _applySvgStrokeWidthToMap(key, strokeWidth) {
+  const m = key.match(/^active-(\d+)$/);
+  if (!m) return;
+  const qi = parseInt(m[1]);
+  const q = S.queries[qi];
+  if (!q) return;
+  q.elementLayers?.forEach((layer, eid) => {
+    const el = q.elements.find(e => elId(e) === eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    try {
+      if (el.type !== 'node') layer.setStyle({ weight: strokeWidth });
+    } catch(_) {}
+  });
+  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+    if (S.selectedIds.has(eid)) return;
+    try { poly.setStyle({ weight: strokeWidth }); } catch(_) {}
+  });
+}
+
+function _applySvgDashArrayToMap(key, dashArray) {
+  const m = key.match(/^active-(\d+)$/);
+  if (!m) return;
+  const qi = parseInt(m[1]);
+  const q = S.queries[qi];
+  if (!q) return;
+  q.elementLayers?.forEach((layer, eid) => {
+    const el = q.elements.find(e => elId(e) === eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    try {
+      if (el.type !== 'node') layer.setStyle({ dashArray: dashArray || null });
+    } catch(_) {}
+  });
+  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+    if (S.selectedIds.has(eid)) return;
+    try { poly.setStyle({ dashArray: dashArray || null }); } catch(_) {}
+  });
+}
+
+function _applySvgDotSizeToMap(key, dotSize) {
+  const m = key.match(/^active-(\d+)$/);
+  if (!m) return;
+  const qi = parseInt(m[1]);
+  const q = S.queries[qi];
+  if (!q) return;
+  q.elementLayers?.forEach((layer, eid) => {
+    const el = q.elements.find(e => elId(e) === eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    try {
+      if (el.type === 'node') layer.setStyle({ radius: dotSize });
+    } catch(_) {}
+  });
+  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+    if (S.selectedIds.has(eid)) return;
+    try { fallback.setStyle({ radius: dotSize }); } catch(_) {}
+  });
+}
+
+function _applySvgLabelsToMap(key, labels, labelField) {
+  const keyMatch = key.match(/^active-(\d+)$/);
+  if (!keyMatch) return;
+  const qi = parseInt(keyMatch[1]);
+  const q = S.queries[qi];
+  if (!q) return;
+  // Remove the existing label layer group for this query if present
+  if (q.labelLayerGroup) { S.map.removeLayer(q.labelLayerGroup); q.labelLayerGroup = null; }
+  if (!labels) return;
+  const lg = L.layerGroup().addTo(S.map);
+  (q.elements || []).forEach(el => {
+    const text = (el.tags || {})[labelField || 'name'];
+    if (!text) return;
+    let latlng = null;
+    if (el.type === 'node') {
+      latlng = [el.lat, el.lon];
+    } else if (el.type === 'way' && el.geometry && el.geometry.length) {
+      const mid = el.geometry[Math.floor(el.geometry.length / 2)];
+      latlng = [mid.lat, mid.lon];
+    } else if (el.type === 'relation' && el.members) {
+      const firstWay = el.members.find(mb => mb.type === 'way' && mb.geometry && mb.geometry.length);
+      if (firstWay) { const mid = firstWay.geometry[Math.floor(firstWay.geometry.length / 2)]; latlng = [mid.lat, mid.lon]; }
+    }
+    if (!latlng) return;
+    try {
+      L.marker(latlng, {
+        icon: L.divIcon({ className: 'map-label', html: `<span>${esc(text)}</span>`, iconAnchor: [0, 0] }),
+        interactive: false,
+        keyboard: false,
+      }).addTo(lg);
+    } catch(_) {}
+  });
+  q.labelLayerGroup = lg;
+}
+
+function _applyTileProviderToMap(providerKey) {
+  const provider = TILE_PROVIDERS[providerKey];
+  if (!provider) return;
+  if (S.tileLayer) { S.map.removeLayer(S.tileLayer); S.tileLayer = null; }
+  if (provider.leafletUrl) {
+    S.tileLayer = L.tileLayer(provider.leafletUrl, {
+      attribution: provider.attribution,
+      maxZoom: 19,
+    }).addTo(S.map);
+  }
 }
 
 async function doExportSvg() {
