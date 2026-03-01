@@ -1613,11 +1613,11 @@ function selectByTagValue(key, value, clickedChip) {
 /* ── SVG export ─────────────────────────────────────── */
 
 const TILE_PROVIDERS = {
-  osm:        { name: 'OSM Standard',    url: (z,x,y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png` },
-  hot:        { name: 'OSM HOT',          url: (z,x,y) => `https://a.tile.openstreetmap.fr/hot/${z}/${x}/${y}.png` },
-  cartoLight: { name: 'CartoDB Light',   url: (z,x,y) => `https://a.basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png` },
-  cartoDark:  { name: 'CartoDB Dark',    url: (z,x,y) => `https://a.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png` },
-  none:       { name: 'No tiles',        url: null },
+  osm:        { name: 'OSM Standard',   url: (z,x,y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,                 leafletUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' },
+  hot:        { name: 'OSM HOT',         url: (z,x,y) => `https://a.tile.openstreetmap.fr/hot/${z}/${x}/${y}.png`,            leafletUrl: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',                  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Tiles by HOT' },
+  cartoLight: { name: 'CartoDB Light',  url: (z,x,y) => `https://a.basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png`,      leafletUrl: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+  cartoDark:  { name: 'CartoDB Dark',   url: (z,x,y) => `https://a.basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png`,       leafletUrl: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>' },
+  none:       { name: 'No tiles',       url: null,                                                                             leafletUrl: null,                                                                      attribution: '' },
 };
 
 const svgExportState = {
