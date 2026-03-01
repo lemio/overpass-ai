@@ -1068,6 +1068,7 @@ function clearAllLayers() {
   });
   Object.values(S.shownSearches).forEach(shown => {
     shown.layerGroups.forEach(lg => { if (lg) S.map.removeLayer(lg); });
+    (shown.labelLayerGroups || []).forEach(lg => { if (lg) S.map.removeLayer(lg); });
   });
   S.shownSearches = {};
   renderSavedSearches();
@@ -1717,6 +1718,14 @@ function openSvgExport() {
   _renderSvgSettings(settings, sortedTagKeys, queryRows);
   openSvgView();
   _svgTileCache = null;
+
+  // Re-apply labels for any queries that had labels enabled (e.g. after a new query re-render)
+  queryRows.forEach(({ key }) => {
+    const qs = svgExportState.queryStyles[key];
+    if (qs && qs.labels) {
+      _applySvgLabelsToMap(key, true, qs.labelField || 'name', qs.labelFontSize || 11);
+    }
+  });
 }
 
 function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
@@ -1830,105 +1839,135 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
   });
 }
 
+function _resolveStyleTarget(key) {
+  const activeMatch = key.match(/^active-(\d+)$/);
+  if (activeMatch) {
+    const qi = parseInt(activeMatch[1]);
+    const q = S.queries[qi];
+    if (!q) return null;
+    return {
+      elements: q.elements || [],
+      elementLayers: q.elementLayers || new Map(),
+      areaFallbacks: q.areaFallbacks || [],
+      getLabelLayerGroup: () => q.labelLayerGroup,
+      setLabelLayerGroup: (lg) => { q.labelLayerGroup = lg; },
+      getLayerGroup: () => q.layerGroup,
+    };
+  }
+  const shownMatch = key.match(/^shown-(.+)-(\d+)$/);
+  if (shownMatch) {
+    const id = shownMatch[1], qi = parseInt(shownMatch[2]);
+    const shown = S.shownSearches[id];
+    if (!shown) return null;
+    const sq = shown.queries[qi];
+    if (!sq) return null;
+    if (!shown.labelLayerGroups) shown.labelLayerGroups = [];
+    return {
+      elements: sq.elements || [],
+      elementLayers: sq.elementLayers || new Map(),
+      areaFallbacks: sq.areaFallbacks || [],
+      getLabelLayerGroup: () => shown.labelLayerGroups[qi],
+      setLabelLayerGroup: (lg) => { shown.labelLayerGroups[qi] = lg; },
+      getLayerGroup: () => shown.layerGroups[qi],
+    };
+  }
+  return null;
+}
+
 function _applySvgColorToMap(key, color) {
-  const m = key.match(/^active-(\d+)$/);
-  if (!m) return;
-  const qi = parseInt(m[1]);
-  const q = S.queries[qi];
-  if (!q) return;
-  q.elementLayers?.forEach((layer, eid) => {
-    const el = q.elements.find(e => elId(e) === eid);
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  t.elementLayers.forEach((layer, eid) => {
+    const el = t.elements.find(e => elId(e) === eid);
     if (!el || S.selectedIds.has(eid)) return;
     try {
-      if (el.type === 'node') layer.setStyle({ fillColor: color });
-      else layer.setStyle({ color });
+      if (el.type === 'node') {
+        layer.setStyle({ fillColor: color });
+      } else if (el.type === 'way' && isAreaEl(el.tags)) {
+        layer.setStyle({ color, fillColor: color });
+      } else {
+        layer.setStyle({ color });
+      }
     } catch(_) {}
   });
-  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+  t.areaFallbacks.forEach(({ poly, fallback, eid }) => {
     if (S.selectedIds.has(eid)) return;
     try { poly.setStyle({ color, fillColor: color }); fallback.setStyle({ fillColor: color }); } catch(_) {}
   });
 }
 
 function _applySvgVisibilityToMap(key, visible) {
-  const m = key.match(/^active-(\d+)$/);
-  if (!m) return;
-  const qi = parseInt(m[1]);
-  const q = S.queries[qi];
-  if (!q || !q.layerGroup) return;
-  if (visible) S.map.addLayer(q.layerGroup);
-  else S.map.removeLayer(q.layerGroup);
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  const lg = t.getLayerGroup();
+  if (lg) {
+    if (visible) S.map.addLayer(lg);
+    else S.map.removeLayer(lg);
+  }
+  const llg = t.getLabelLayerGroup();
+  if (llg) {
+    if (visible) S.map.addLayer(llg);
+    else S.map.removeLayer(llg);
+  }
 }
 
 function _applySvgStrokeWidthToMap(key, strokeWidth) {
-  const m = key.match(/^active-(\d+)$/);
-  if (!m) return;
-  const qi = parseInt(m[1]);
-  const q = S.queries[qi];
-  if (!q) return;
-  q.elementLayers?.forEach((layer, eid) => {
-    const el = q.elements.find(e => elId(e) === eid);
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  t.elementLayers.forEach((layer, eid) => {
+    const el = t.elements.find(e => elId(e) === eid);
     if (!el || S.selectedIds.has(eid)) return;
     try {
       if (el.type !== 'node') layer.setStyle({ weight: strokeWidth });
     } catch(_) {}
   });
-  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+  t.areaFallbacks.forEach(({ poly, fallback, eid }) => {
     if (S.selectedIds.has(eid)) return;
     try { poly.setStyle({ weight: strokeWidth }); } catch(_) {}
   });
 }
 
 function _applySvgDashArrayToMap(key, dashArray) {
-  const m = key.match(/^active-(\d+)$/);
-  if (!m) return;
-  const qi = parseInt(m[1]);
-  const q = S.queries[qi];
-  if (!q) return;
-  q.elementLayers?.forEach((layer, eid) => {
-    const el = q.elements.find(e => elId(e) === eid);
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  t.elementLayers.forEach((layer, eid) => {
+    const el = t.elements.find(e => elId(e) === eid);
     if (!el || S.selectedIds.has(eid)) return;
     try {
       if (el.type !== 'node') layer.setStyle({ dashArray: dashArray || null });
     } catch(_) {}
   });
-  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+  t.areaFallbacks.forEach(({ poly, fallback, eid }) => {
     if (S.selectedIds.has(eid)) return;
     try { poly.setStyle({ dashArray: dashArray || null }); } catch(_) {}
   });
 }
 
 function _applySvgDotSizeToMap(key, dotSize) {
-  const m = key.match(/^active-(\d+)$/);
-  if (!m) return;
-  const qi = parseInt(m[1]);
-  const q = S.queries[qi];
-  if (!q) return;
-  q.elementLayers?.forEach((layer, eid) => {
-    const el = q.elements.find(e => elId(e) === eid);
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  t.elementLayers.forEach((layer, eid) => {
+    const el = t.elements.find(e => elId(e) === eid);
     if (!el || S.selectedIds.has(eid)) return;
     try {
       if (el.type === 'node') layer.setStyle({ radius: dotSize });
     } catch(_) {}
   });
-  (q.areaFallbacks || []).forEach(({ poly, fallback, eid }) => {
+  t.areaFallbacks.forEach(({ poly, fallback, eid }) => {
     if (S.selectedIds.has(eid)) return;
     try { fallback.setStyle({ radius: dotSize }); } catch(_) {}
   });
 }
 
 function _applySvgLabelsToMap(key, labels, labelField, fontSize) {
-  const keyMatch = key.match(/^active-(\d+)$/);
-  if (!keyMatch) return;
-  const qi = parseInt(keyMatch[1]);
-  const q = S.queries[qi];
-  if (!q) return;
-  // Remove the existing label layer group for this query if present
-  if (q.labelLayerGroup) { S.map.removeLayer(q.labelLayerGroup); q.labelLayerGroup = null; }
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  const existingLg = t.getLabelLayerGroup();
+  if (existingLg) { S.map.removeLayer(existingLg); t.setLabelLayerGroup(null); }
   if (!labels) return;
   const fs = (Number.isFinite(fontSize) && fontSize > 0) ? fontSize : 11;
   const lg = L.layerGroup().addTo(S.map);
-  (q.elements || []).forEach(el => {
+  t.elements.forEach(el => {
     const text = (el.tags || {})[labelField || 'name'];
     if (!text) return;
     let latlng = null;
@@ -1950,7 +1989,7 @@ function _applySvgLabelsToMap(key, labels, labelField, fontSize) {
       }).addTo(lg);
     } catch(_) {}
   });
-  q.labelLayerGroup = lg;
+  t.setLabelLayerGroup(lg);
 }
 
 function _applyTileProviderToMap(providerKey) {
@@ -2502,7 +2541,9 @@ async function showSavedSearchOnMap(id) {
           (el.type === 'relation' && el.members)
         );
       }
-      shownQueries.push({ name: q.name, elements });
+      const elLayers = new Map();
+      const qAreaFallbacks = [];
+      shownQueries.push({ name: q.name, elements, elementLayers: elLayers, areaFallbacks: qAreaFallbacks });
       const lg = L.layerGroup().addTo(S.map);
       const MAX_RENDER = 1000;
       elements.slice(0, MAX_RENDER).forEach(el => {
@@ -2521,6 +2562,7 @@ async function showSavedSearchOnMap(id) {
             fallback.bindPopup(buildPopup(el, name, qColor));
             lg.addLayer(fallback);
             areaFallbacks.push({ poly: layer, fallback, eid, color: qColor });
+            qAreaFallbacks.push({ poly: layer, fallback, eid });
           } else {
             layer = L.polyline(pts, lineStyle(qColor));
           }
@@ -2531,13 +2573,14 @@ async function showSavedSearchOnMap(id) {
         if (layer) {
           layer.bindPopup(buildPopup(el, name, qColor));
           lg.addLayer(layer);
+          elLayers.set(eid, layer);
         }
       });
       layerGroups.push(lg);
     } catch (err) {
       console.warn('showSavedSearchOnMap query error:', err);
       // Push empty entry to keep shownQueries and layerGroups arrays in sync
-      shownQueries.push({ name: q.name, elements: [] });
+      shownQueries.push({ name: q.name, elements: [], elementLayers: new Map(), areaFallbacks: [] });
       layerGroups.push(null);
     }
   }
@@ -2548,6 +2591,7 @@ function hideSavedSearchFromMap(id) {
   const shown = S.shownSearches[id];
   if (!shown) return;
   shown.layerGroups.forEach(lg => { if (lg) S.map.removeLayer(lg); });
+  (shown.labelLayerGroups || []).forEach(lg => { if (lg) S.map.removeLayer(lg); });
   delete S.shownSearches[id];
   renderSavedSearches();
 }
