@@ -1654,7 +1654,10 @@ function closeSvgView() {
 }
 
 function refreshSvgPanelIfOpen() {
-  if (document.getElementById('svgPanelBody').style.display !== 'none') openSvgExport();
+  if (document.getElementById('svgPanelBody').style.display !== 'none') {
+    if (getAllExportElements().length) openSvgExport();
+    else closeSvgView();
+  }
 }
 
 function openSvgExport() {
