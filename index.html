@@ -240,6 +240,20 @@
     .btn-icon { padding: 4px 8px; }
     .btn-icon i { font-size: 12px; }
 
+    /* ── Settings badge (no LLM configured) ─────────────────────── */
+    .settings-badge {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #e67e22; flex-shrink: 0; display: inline-block;
+      animation: badge-pulse 2s ease-in-out infinite;
+    }
+    @keyframes badge-pulse {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.45; }
+    }
+
+    /* ── Preset links inside help-text ──────────────────────────── */
+    .preset-link { color: var(--accent); text-decoration: none; cursor: pointer; }
+    .preset-link:hover { text-decoration: underline; }
+
     /* ── CSV Export (side panel) ─────────────────────────────────── */
     .csv-field-list { flex: 1; overflow-y: auto; }
     .csv-field-row {
@@ -294,7 +308,7 @@
     <span class="topbar-title">Overpass AI</span>
     <span class="topbar-spacer"></span>
     <button class="btn btn-sm btn-icon" id="shareBtn" title="Copy share link to clipboard"><i class="fa-solid fa-share-nodes"></i> Share</button>
-    <button class="btn btn-sm btn-icon" id="settingsBtn" title="Settings"><i class="fa-solid fa-gear"></i></button>
+    <button class="btn btn-sm btn-icon" id="settingsBtn" title="Settings — configure your LLM endpoint and API key"><i class="fa-solid fa-gear"></i><span class="settings-badge" id="settingsBadge" title="No LLM configured — click to set up"></span></button>
   </div>
 
   <!-- Main layout -->
@@ -413,17 +427,32 @@
   <div class="modal">
     <div class="modal-title">Settings</div>
     <div class="form-group">
-      <label class="label" for="apiKeyInput">OpenAI API Key</label>
-      <input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off" />
-      <div class="help-text">Stored in your browser's localStorage. Never sent to any server other than api.openai.com.</div>
+      <label class="label" for="endpointInput">AI Endpoint URL</label>
+      <input type="text" id="endpointInput" placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off" />
+      <div class="help-text">
+        Presets:
+        <a href="#" class="preset-link" data-url="https://api.openai.com/v1/chat/completions" data-model="gpt-4o">OpenAI</a> ·
+        <a href="#" class="preset-link" data-url="https://api.anthropic.com/v1/messages" data-model="claude-opus-4-5">Anthropic (Claude)</a> ·
+        <a href="#" class="preset-link" data-url="http://localhost:1234/v1/chat/completions" data-model="">LM Studio (local)</a>
+      </div>
     </div>
     <div class="form-group">
-      <label class="label" for="modelSelect">Model</label>
-      <select id="modelSelect">
-        <option value="gpt-4o">GPT-4o (recommended)</option>
-        <option value="gpt-4-turbo">GPT-4 Turbo</option>
-        <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-      </select>
+      <label class="label" for="apiKeyInput">API Key</label>
+      <input type="password" id="apiKeyInput" placeholder="sk-..." autocomplete="off" />
+      <div class="help-text">Stored in your browser's localStorage. Not required for local endpoints.</div>
+    </div>
+    <div class="form-group">
+      <label class="label" for="modelInput">Model</label>
+      <input type="text" id="modelInput" list="modelSuggestions" placeholder="gpt-4o" autocomplete="off" />
+      <datalist id="modelSuggestions">
+        <option value="gpt-4o">GPT-4o (OpenAI)</option>
+        <option value="gpt-4-turbo">GPT-4 Turbo (OpenAI)</option>
+        <option value="gpt-3.5-turbo">GPT-3.5 Turbo (OpenAI)</option>
+        <option value="claude-opus-4-5">Claude Opus 4.5 (Anthropic)</option>
+        <option value="claude-sonnet-4-5">Claude Sonnet 4.5 (Anthropic)</option>
+        <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku (Anthropic)</option>
+        <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet (Anthropic)</option>
+      </datalist>
     </div>
     <div class="modal-actions">
       <button class="btn" id="cancelSettingsBtn">Cancel</button>
@@ -472,6 +501,7 @@ const EXAMPLES = [
 const S = {
   apiKey: '',
   model: 'gpt-4o',
+  endpoint: 'https://api.openai.com/v1/chat/completions',
   map: null,
   tileLayer: null,
   queries: [],      // [{name, description, overpassQL, tags, elements, layerGroup, elementLayers, areaFallbacks, visible}]
@@ -484,11 +514,13 @@ const S = {
 
 /* ── Init ───────────────────────────────────────────────────────── */
 function init() {
-  S.apiKey = localStorage.getItem('openai_api_key') || '';
-  S.model  = localStorage.getItem('openai_model')   || 'gpt-4o';
+  S.apiKey   = localStorage.getItem('openai_api_key') || '';
+  S.model    = localStorage.getItem('openai_model')   || 'gpt-4o';
+  S.endpoint = localStorage.getItem('llm_endpoint')   || 'https://api.openai.com/v1/chat/completions';
   try { S.savedSearches = JSON.parse(localStorage.getItem('saved_searches') || '[]'); } catch(e) { S.savedSearches = []; console.warn('Could not parse saved searches from localStorage:', e); }
   buildExamples();
   bindEvents();
+  updateSettingsBadge();
   try {
     initMap();
     updateStatusBounds();
@@ -546,6 +578,15 @@ function bindEvents() {
   document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
   document.getElementById('settingsOverlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeSettings(); });
 
+  // Endpoint presets
+  document.querySelectorAll('.preset-link').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      document.getElementById('endpointInput').value = a.dataset.url;
+      if (a.dataset.model) document.getElementById('modelInput').value = a.dataset.model;
+    });
+  });
+
   // Query
   document.getElementById('generateBtn').addEventListener('click', handleGenerate);
   document.getElementById('questionInput').addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'Enter') handleGenerate(); });
@@ -581,17 +622,28 @@ function bindEvents() {
 
 /* ── Settings ───────────────────────────────────────────────────── */
 function openSettings() {
-  document.getElementById('apiKeyInput').value = S.apiKey;
-  document.getElementById('modelSelect').value = S.model;
+  document.getElementById('endpointInput').value = S.endpoint;
+  document.getElementById('apiKeyInput').value   = S.apiKey;
+  document.getElementById('modelInput').value    = S.model;
   document.getElementById('settingsOverlay').classList.add('open');
 }
 function closeSettings() { document.getElementById('settingsOverlay').classList.remove('open'); }
 function saveSettings() {
-  S.apiKey = document.getElementById('apiKeyInput').value.trim();
-  S.model  = document.getElementById('modelSelect').value;
+  S.endpoint = document.getElementById('endpointInput').value.trim() || 'https://api.openai.com/v1/chat/completions';
+  S.apiKey   = document.getElementById('apiKeyInput').value.trim();
+  S.model    = document.getElementById('modelInput').value.trim() || 'gpt-4o';
+  localStorage.setItem('llm_endpoint',   S.endpoint);
   localStorage.setItem('openai_api_key', S.apiKey);
   localStorage.setItem('openai_model',   S.model);
+  updateSettingsBadge();
   closeSettings();
+}
+function isLocalEndpoint(url) {
+  try { const h = new URL(url).hostname; return h === 'localhost' || h === '127.0.0.1' || h === '::1'; } catch { return false; }
+}
+function updateSettingsBadge() {
+  const badge = document.getElementById('settingsBadge');
+  if (badge) badge.style.display = (S.apiKey || isLocalEndpoint(S.endpoint)) ? 'none' : 'inline-block';
 }
 
 /* ── Status bar ─────────────────────────────────────────────────── */
@@ -613,7 +665,7 @@ function updateStatusResults() {
 async function handleGenerate() {
   const question = document.getElementById('questionInput').value.trim();
   if (!question) return;
-  if (!S.apiKey) { showError('Please set your OpenAI API key in Settings.'); return; }
+  if (!S.apiKey && !isLocalEndpoint(S.endpoint)) { showError('No LLM configured — please open ⚙ Settings to set your endpoint and API key before generating queries.'); return; }
 
   // Hide examples after first search
   document.getElementById('examplesSection').style.display = 'none';
@@ -760,26 +812,57 @@ Use this bbox in your queries unless the user specified a named area.`;
     messages.push({ role: 'user', content: retryContext.feedback });
   }
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${S.apiKey}` },
-    body: JSON.stringify({
-      model: S.model,
-      messages,
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-      max_tokens: 4096,
-    }),
-  });
+  const isAnthropic = S.endpoint.includes('api.anthropic.com');
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error?.message || `OpenAI API error ${res.status}`);
+  let res, content;
+  if (isAnthropic) {
+    // Anthropic Messages API format
+    const anthropicMessages = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: m.content }));
+    const systemMsg = messages.find(m => m.role === 'system')?.content || '';
+    res = await fetch(S.endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': S.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: S.model,
+        max_tokens: 4096,
+        system: systemMsg,
+        messages: anthropicMessages,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Anthropic API error ${res.status}`);
+    }
+    const data = await res.json();
+    content = data.content?.[0]?.text || '';
+  } else {
+    // OpenAI-compatible format (OpenAI, LM Studio, etc.)
+    res = await fetch(S.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${S.apiKey}` },
+      body: JSON.stringify({
+        model: S.model,
+        messages,
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+        max_tokens: 4096,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `LLM API error ${res.status}`);
+    }
+    const data = await res.json();
+    content = data.choices?.[0]?.message?.content || '';
   }
 
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content || '';
-  try { return JSON.parse(content); }
+  // Strip markdown code fences if present (some models wrap JSON in ```json ... ```)
+  const cleaned = content.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  try { return JSON.parse(cleaned); }
   catch { throw new Error('Could not parse AI response. Try again.'); }
 }
 
