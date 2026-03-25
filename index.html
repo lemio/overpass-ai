@@ -1027,9 +1027,34 @@ function renderOnMap(idx, elements) {
         layer = L.polyline(pts, lineStyle(color));
       }
     } else if (el.type === 'relation' && el.members) {
-      const ways = el.members.filter(m => m.type === 'way' && m.geometry);
-      if (ways.length) {
-        layer = L.polyline(ways.map(w => w.geometry.map(p => [p.lat, p.lon])), lineStyle(color));
+      const wayMembers = el.members.filter(m => m.type === 'way' && m.geometry);
+      if (wayMembers.length) {
+        if (isMultipolygonRelation(el)) {
+          const outerRings = wayMembers.filter(m => !m.role || m.role === 'outer').map(m => m.geometry.map(p => [p.lat, p.lon]));
+          const innerRings = wayMembers.filter(m => m.role === 'inner').map(m => m.geometry.map(p => [p.lat, p.lon]));
+          if (outerRings.length) {
+            layer = L.polygon([...outerRings, ...innerRings], polyStyle(color));
+            const bounds = layer.getBounds();
+            const center = bounds.getCenter();
+            let thresholdZoom = null;
+            try {
+              const sw = S.map.latLngToContainerPoint(bounds.getSouthWest());
+              const ne = S.map.latLngToContainerPoint(bounds.getNorthEast());
+              const pxSize = Math.max(Math.abs(ne.x - sw.x), Math.abs(ne.y - sw.y));
+              if (pxSize > 0) thresholdZoom = S.map.getZoom() + Math.log2(AREA_MIN_PX / pxSize);
+            } catch(_) {}
+            const fallback = L.circleMarker([center.lat, center.lng], { ...nodeStyle(color), opacity: 0, fillOpacity: 0 });
+            fallback.bindPopup(buildPopup(el, name, color));
+            fallback.on('click', () => { toggleSel(eid); renderResultsList(); });
+            lg.addLayer(fallback);
+            areaFallbacks.push({ poly: layer, fallback, eid, thresholdZoom });
+            areaFallbackMap.set(eid, fallback);
+          } else {
+            layer = L.polyline(wayMembers.map(w => w.geometry.map(p => [p.lat, p.lon])), lineStyle(color));
+          }
+        } else {
+          layer = L.polyline(wayMembers.map(w => w.geometry.map(p => [p.lat, p.lon])), lineStyle(color));
+        }
       }
     }
 
@@ -1119,6 +1144,19 @@ function _applyAreaDots() {
 
 function isAreaEl(tags = {}) {
   return ['building','landuse','leisure','natural','amenity','shop'].some(k => k in tags) || tags.area === 'yes';
+}
+
+// Returns true when a relation represents a filled area (multipolygon).
+// Detection criteria (any one sufficient):
+//   1. Explicit type=multipolygon tag
+//   2. Area-like tags (landuse, building, leisure, natural, amenity, shop, area=yes)
+//   3. At least one member with role 'outer' or 'inner'
+function isMultipolygonRelation(el) {
+  if (el.type !== 'relation' || !el.members) return false;
+  const tags = el.tags || {};
+  if (tags.type === 'multipolygon') return true;
+  if (isAreaEl(tags)) return true;
+  return el.members.some(m => m.type === 'way' && (m.role === 'outer' || m.role === 'inner'));
 }
 
 function elId(el)   { return `${el.type}-${el.id}`; }
@@ -1856,12 +1894,13 @@ function openSvgExport() {
   const queryRows = _buildQueryRows();
   queryRows.forEach(({ key, color }) => {
     if (!svgExportState.queryStyles[key]) {
-      svgExportState.queryStyles[key] = { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name', labelFontSize: 11 };
+      svgExportState.queryStyles[key] = { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name', labelFontSize: 11, fillOpacity: 0.2 };
     } else {
       if (!svgExportState.queryStyles[key].color) svgExportState.queryStyles[key].color = color;
       if (svgExportState.queryStyles[key].labels === undefined) svgExportState.queryStyles[key].labels = false;
       if (!svgExportState.queryStyles[key].labelField) svgExportState.queryStyles[key].labelField = 'name';
       if (svgExportState.queryStyles[key].labelFontSize === undefined) svgExportState.queryStyles[key].labelFontSize = 11;
+      if (svgExportState.queryStyles[key].fillOpacity === undefined) svgExportState.queryStyles[key].fillOpacity = 0.2;
     }
   });
 
@@ -1932,6 +1971,8 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
           </select></div>
         <div class="svg-qstyle-ctrl"><label>Sz</label>
           <input type="number" class="svg-qstyle-num" min="2" max="20" step="1" value="${qs.dotSize||5}" data-field="dotSize"></div>
+        <div class="svg-qstyle-ctrl"><label>Fill</label>
+          <input type="number" class="svg-qstyle-num" min="0" max="1" step="0.05" value="${(qs.fillOpacity??0.2).toFixed(2)}" data-field="fillOpacity"></div>
         <div class="svg-qstyle-ctrl"><label>Labels</label>
           <input type="checkbox" data-field="labels"${qs.labels?' checked':''}></div>
         <div class="svg-qstyle-ctrl svg-label-field-ctrl" style="${qs.labels?'':'display:none;'}">
@@ -1990,6 +2031,9 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
           qs[field] = parseFloat(input.value) || (field === 'dotSize' ? 5 : 2);
           if (field === 'strokeWidth') _applySvgStrokeWidthToMap(key, qs[field]);
           if (field === 'dotSize') _applySvgDotSizeToMap(key, qs[field]);
+        } else if (field === 'fillOpacity') {
+          qs[field] = Math.max(0, Math.min(1, parseFloat(input.value) || 0.2));
+          _applySvgFillOpacityToMap(key, qs[field]);
         } else if (field === 'dashArray') {
           qs[field] = input.value;
           _applySvgDashArrayToMap(key, input.value);
@@ -2046,7 +2090,7 @@ function _applySvgColorToMap(key, color) {
     try {
       if (el.type === 'node') {
         layer.setStyle({ fillColor: color });
-      } else if (el.type === 'way' && isAreaEl(el.tags)) {
+      } else if ((el.type === 'way' && isAreaEl(el.tags)) || isMultipolygonRelation(el)) {
         layer.setStyle({ color, fillColor: color });
       } else {
         layer.setStyle({ color });
@@ -2123,6 +2167,25 @@ function _applySvgDotSizeToMap(key, dotSize) {
   t.areaFallbacks.forEach(({ poly, fallback, eid }) => {
     if (S.selectedIds.has(eid)) return;
     try { fallback.setStyle({ radius: dotSize }); } catch(_) {}
+  });
+}
+
+function _applySvgFillOpacityToMap(key, fillOpacity) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  t.elementLayers.forEach((layer, eid) => {
+    const el = t.elements.find(e => elId(e) === eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    try {
+      if ((el.type === 'way' && isAreaEl(el.tags)) || isMultipolygonRelation(el)) {
+        layer.setStyle({ fillOpacity });
+      }
+    } catch(_) {}
+  });
+  t.areaFallbacks.forEach(({ poly, fallback, eid }) => {
+    if (S.selectedIds.has(eid)) return;
+    try { poly.setStyle({ fillOpacity }); } catch(_) {}
   });
 }
 
@@ -2331,6 +2394,8 @@ async function _generateSvgString(skipBackground = false) {
     const da        = qStyle.dashArray   || '';
     const dotR      = qStyle.dotSize     || 5;
     const dotShp    = qStyle.dotShape    || 'circle';
+    const fillOp    = qStyle.fillOpacity ?? 0.2;
+    const selFillOp = Math.min(fillOp + 0.15, 1);
     const inclLabels = !selectionPass && (qStyle.labels || false);
     const labelField = qStyle.labelField || 'name';
     const labelFontSize = qStyle.labelFontSize || 11;
@@ -2375,7 +2440,7 @@ async function _generateSvgString(skipBackground = false) {
           shape = document.createElementNS(svgNS, 'polygon');
           shape.setAttribute('points',       pStr);
           shape.setAttribute('fill',         color);
-          shape.setAttribute('fill-opacity', selectionPass ? '0.35' : '0.2');
+          shape.setAttribute('fill-opacity', selectionPass ? selFillOp.toFixed(2) : fillOp.toFixed(2));
           shape.setAttribute('stroke',       color);
           shape.setAttribute('stroke-width', sw);
           if (da) shape.setAttribute('stroke-dasharray', da);
@@ -2405,20 +2470,58 @@ async function _generateSvgString(skipBackground = false) {
         group.appendChild(shape);
 
       } else if (el.type === 'relation' && el.members) {
+        const wayMembers = el.members.filter(m => m.type === 'way' && m.geometry);
+        if (!wayMembers.length) return;
         const rg = document.createElementNS(svgNS, 'g');
         rg.setAttribute('id', sid);
-        el.members.filter(m => m.type === 'way' && m.geometry).forEach((m, mi) => {
-          const pts  = m.geometry.map(p => geoToSvg(p.lat, p.lon));
-          const pStr = pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
-          const line = document.createElementNS(svgNS, 'polyline');
-          line.setAttribute('points',       pStr);
-          line.setAttribute('fill',         'none');
-          line.setAttribute('stroke',       color);
-          line.setAttribute('stroke-width', selectionPass ? sw + 1 : sw);
-          if (da) line.setAttribute('stroke-dasharray', da);
-          if (mi === 0) { const t = document.createElementNS(svgNS, 'title'); t.textContent = name; line.appendChild(t); }
-          rg.appendChild(line);
-        });
+        if (isMultipolygonRelation(el)) {
+          const outerMembers = wayMembers.filter(m => !m.role || m.role === 'outer');
+          const innerMembers = wayMembers.filter(m => m.role === 'inner');
+          const allMembers   = [...outerMembers, ...innerMembers];
+          let pathD = '';
+          allMembers.forEach(m => {
+            const pts = m.geometry.map(p => geoToSvg(p.lat, p.lon));
+            if (!pts.length) return;
+            pathD += 'M ' + pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' L ') + ' Z ';
+          });
+          if (pathD) {
+            const path = document.createElementNS(svgNS, 'path');
+            path.setAttribute('d',            pathD.trim());
+            path.setAttribute('fill-rule',    'evenodd');
+            path.setAttribute('fill',         color);
+            path.setAttribute('fill-opacity', selectionPass ? selFillOp.toFixed(2) : fillOp.toFixed(2));
+            path.setAttribute('stroke',       color);
+            path.setAttribute('stroke-width', selectionPass ? sw + 1 : sw);
+            if (da) path.setAttribute('stroke-dasharray', da);
+            const t = document.createElementNS(svgNS, 'title'); t.textContent = name; path.appendChild(t);
+            rg.appendChild(path);
+            if (inclLabels && labelText && outerMembers.length) {
+              const allPts = outerMembers.flatMap(m => m.geometry.map(p => geoToSvg(p.lat, p.lon)));
+              if (allPts.length) {
+                const xs = allPts.map(p => p.x), ys = allPts.map(p => p.y);
+                labelCandidates.push({ text: labelText,
+                  anchorX: (Math.min(...xs) + Math.max(...xs)) / 2,
+                  anchorY: (Math.min(...ys) + Math.max(...ys)) / 2,
+                  isArea: true, dotR: 0,
+                  areaMinX: Math.min(...xs), areaMinY: Math.min(...ys),
+                  areaMaxX: Math.max(...xs), areaMaxY: Math.max(...ys), fontSize: labelFontSize });
+              }
+            }
+          }
+        } else {
+          wayMembers.forEach((m, mi) => {
+            const pts  = m.geometry.map(p => geoToSvg(p.lat, p.lon));
+            const pStr = pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' ');
+            const line = document.createElementNS(svgNS, 'polyline');
+            line.setAttribute('points',       pStr);
+            line.setAttribute('fill',         'none');
+            line.setAttribute('stroke',       color);
+            line.setAttribute('stroke-width', selectionPass ? sw + 1 : sw);
+            if (da) line.setAttribute('stroke-dasharray', da);
+            if (mi === 0) { const t = document.createElementNS(svgNS, 'title'); t.textContent = name; line.appendChild(t); }
+            rg.appendChild(line);
+          });
+        }
         group.appendChild(rg);
       }
     });
@@ -2430,14 +2533,14 @@ async function _generateSvgString(skipBackground = false) {
 
   // First pass: non-selected elements
   queryRows.forEach(({ q, key, color }) => {
-    const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name' };
+    const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name', fillOpacity: 0.2 };
     if (qs.visible !== false) drawQueryElements(q, qs, false);
   });
 
   // Second pass: selected elements rendered on top
   if (S.selectedIds.size) {
     queryRows.forEach(({ q, key, color }) => {
-      const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name' };
+      const qs = svgExportState.queryStyles[key] || { color, strokeWidth: 2, dashArray: '', dotShape: 'circle', dotSize: 5, queryStyle: 'auto', visible: true, labels: false, labelField: 'name', fillOpacity: 0.2 };
       if (qs.visible !== false) drawQueryElements(q, qs, true);
     });
   }
