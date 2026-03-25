@@ -1970,9 +1970,8 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
     const lblOpts = sortedTagKeys
       .map(k => `<option value="${esc(k)}"${(qs.labelField||'name') === k ? ' selected' : ''}>${esc(k)}</option>`)
       .join('');
-    const tagKeyOpts = ['<option value="">— none —</option>',
-      ...sortedTagKeys.map(k => `<option value="${esc(k)}"${qs.colorByTag === k ? ' selected' : ''}>${esc(k)}</option>`)
-    ].join('');
+    const tagKeyOpts = `<option value="">— none —</option>` +
+      sortedTagKeys.map(k => `<option value="${esc(k)}"${qs.colorByTag === k ? ' selected' : ''}>${esc(k)}</option>`).join('');
     perQueryHtml += `<div class="svg-qstyle-row" data-key="${esc(key)}">
       <div class="svg-qstyle-header">
         <input type="color" class="svg-color-input" value="${esc(c)}" data-field="color" title="Base colour"${hasColorByTag ? ' disabled' : ''}>
@@ -2058,7 +2057,7 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
       visBtn.addEventListener('click', () => {
         if (!svgExportState.queryStyles[key]) svgExportState.queryStyles[key] = {};
         const qs = svgExportState.queryStyles[key];
-        qs.visible = qs.visible === false ? true : false;
+        qs.visible = !qs.visible;
         visBtn.title = qs.visible ? 'Hide layer' : 'Show layer';
         visBtn.querySelector('i').className = `fa-regular ${qs.visible ? 'fa-eye' : 'fa-eye-slash'}`;
         visBtn.classList.toggle('vis-off', !qs.visible);
@@ -2112,7 +2111,10 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
               const existing = qs.colorByTagMap || {};
               const newMap = {};
               const vals = new Set();
-              t.elements.forEach(el => { const v = (el.tags || {})[qs.colorByTag]; if (v != null) vals.add(v); });
+              t.elements.forEach(el => {
+                const v = (el.tags || {})[qs.colorByTag];
+                if (v != null) vals.add(v);
+              });
               let ci = 0;
               [...vals].sort().forEach(v => {
                 newMap[v] = existing[v] || COLORS[ci % COLORS.length];
@@ -2358,11 +2360,13 @@ function _renderTagChips(row, key) {
   Object.entries(qs.colorByTagMap).forEach(([val, color]) => {
     const chip = document.createElement('span');
     chip.className = 'svg-tag-chip';
-    chip.style.cssText = `background:${color}22;border-color:${color}66;color:var(--text-0);`;
+    // Validate colour is a safe hex value (always comes from COLORS palette)
+    const safeColor = /^#[0-9a-fA-F]{3,6}$/.test(color) ? color : '#888888';
+    chip.style.cssText = `background:${safeColor}22;border-color:${safeColor}66;color:var(--text-0);`;
     chip.title = `${qs.colorByTag} = ${val}`;
     const swatch = document.createElement('span');
     swatch.className = 'chip-swatch';
-    swatch.style.background = color;
+    swatch.style.background = safeColor;
     chip.appendChild(swatch);
     chip.appendChild(document.createTextNode(val));
     chipsEl.appendChild(chip);
