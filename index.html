@@ -308,6 +308,7 @@
     .svg-tag-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; padding: 0 2px 4px; }
     .svg-tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 5px; border-radius: 10px; font-size: 9.5px; border: 1px solid transparent; white-space: nowrap; cursor: pointer; transition: box-shadow .12s; user-select: none; }
     .svg-tag-chip:hover { box-shadow: 0 0 0 2px rgba(255,255,255,0.35); }
+    .svg-tag-chip.chip-sel { box-shadow: 0 0 0 2px var(--accent) !important; }
     .svg-tag-chip .chip-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
     .svg-tag-chip .chip-count { font-size: 8px; opacity: 0.6; margin-left: 1px; }
     .svg-tag-chip .chip-swatch, .svg-tag-chip .chip-count { pointer-events: none; }
@@ -1832,6 +1833,10 @@ let _svgMapOverlay = null;        // truthy when SVG overlay mode is active
 let _svgMapOverlayTimer = null;
 let _svgZoomWarnListener = null;  // tracks the map zoomend listener for tile-zoom warning
 let _svgLeafletLayer = null;      // L.svgOverlay instance currently shown on the map
+let _chipHoverSeq = 0;            // monotonically-increasing counter to detect stale hover events
+const _selectedChips = new Map(); // `${key}::${field}` → Set<tagValue> for multi-select chip editing
+// Maps a by-tag field name to the SVG data-attribute used for hover highlighting
+const _FIELD_TO_SVG_ATTR = { color: 'data-ctv', strokeWidth: 'data-swtv', dotSize: 'data-dstv', fillOpacity: 'data-fotv', dashArray: 'data-datv' };
 
 function _buildQueryRows() {
   const rows = [];
@@ -2684,53 +2689,87 @@ function _renderTagChips(row, key) {
           const qs = svgExportState.queryStyles[key];
           const mapF = `${field}ByTagMap`;
           if (!qs[mapF]) qs[mapF] = {};
-          qs[mapF][val] = field === 'dashArray' ? valueInput.value : parseFloat(valueInput.value);
+          const newVal = field === 'dashArray' ? valueInput.value : parseFloat(valueInput.value);
+          qs[mapF][val] = newVal;
+          // Apply to all selected chips of the same field
+          const selKey = `${key}::${field}`;
+          const sel = _selectedChips.get(selKey);
+          if (sel && sel.has(val) && sel.size > 1) {
+            sel.forEach(selVal => { qs[mapF][selVal] = newVal; });
+            _renderTagChips(row, key);
+          }
           _applyDynStyleField(key, field);
         });
         chip.appendChild(valueInput);
       }
 
-      // Hover: highlight matching elements in SVG overlay, dim others
+      // Click: toggle chip selection for bulk editing
+      chip.addEventListener('click', e => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+        if (field === 'color') return; // color chips don't have a value input to bulk-edit
+        const selKey = `${key}::${field}`;
+        if (!_selectedChips.has(selKey)) _selectedChips.set(selKey, new Set());
+        const sel = _selectedChips.get(selKey);
+        if (sel.has(val)) sel.delete(val); else sel.add(val);
+        chip.classList.toggle('chip-sel', sel.has(val));
+      });
+
+      // Hover: highlight matching elements in SVG overlay and Leaflet map, dim others
+      // Uses a sequence counter to ensure the last action wins when hovering quickly
       chip.addEventListener('mouseenter', () => {
-        if (field === 'color') {
-          const svgRoot = _svgLeafletLayer ? _svgLeafletLayer._image : null;
-          if (svgRoot) {
-            svgRoot.querySelectorAll('[data-ctv]').forEach(el => {
-              el.style.opacity = el.getAttribute('data-ctv') === val ? CHIP_HIGHLIGHT_OPACITY : CHIP_DIM_OPACITY;
-            });
-            svgRoot.querySelectorAll('g > *:not([data-ctv])').forEach(el => {
-              if (el.tagName !== 'title') el.style.opacity = CHIP_DIM_OPACITY;
-            });
-          }
+        const mySeq = ++_chipHoverSeq;
+        chip._hoverSeq = mySeq;
+        const attr = _FIELD_TO_SVG_ATTR[field];
+        const svgRoot = _svgLeafletLayer ? _svgLeafletLayer._image : null;
+        if (svgRoot && attr) {
+          svgRoot.querySelectorAll(`[${attr}]`).forEach(svgEl => {
+            svgEl.style.opacity = svgEl.getAttribute(attr) === val ? CHIP_HIGHLIGHT_OPACITY : CHIP_DIM_OPACITY;
+          });
+          svgRoot.querySelectorAll(`g > *:not([${attr}])`).forEach(svgEl => {
+            if (svgEl.tagName !== 'title') svgEl.style.opacity = CHIP_DIM_OPACITY;
+          });
+        }
+        if (!_svgMapOverlay) {
           const t = _resolveStyleTarget(key);
           if (t) {
-            t.elementLayers.forEach((layer, eid) => {
-              const el = t.elements.find(e => elId(e) === eid);
-              if (!el) return;
-              const tagVal = (el.tags || {})[tagKey];
-              const elKey = (tagVal != null && tagVal !== '') ? tagVal : '__unknown__';
-              const match = elKey === val;
-              try { layer.setStyle({ opacity: match ? 1 : parseFloat(CHIP_DIM_OPACITY), fillOpacity: match ? undefined : 0.05 }); } catch(_) {}
-            });
+            const tagKey2 = field === 'color' ? qs.colorByTag : qs[`${field}ByTag`];
+            if (tagKey2) {
+              const elMap = new Map(t.elements.map(e => [elId(e), e]));
+              t.elementLayers.forEach((layer, eid) => {
+                const el = elMap.get(eid);
+                if (!el) return;
+                const tagVal = (el.tags || {})[tagKey2];
+                const elKey = (tagVal != null && tagVal !== '') ? tagVal : '__unknown__';
+                try { layer.setStyle({ opacity: elKey === val ? 1 : parseFloat(CHIP_DIM_OPACITY), fillOpacity: elKey === val ? undefined : 0.05 }); } catch(_) {}
+              });
+            }
           }
         }
       });
 
       chip.addEventListener('mouseleave', () => {
-        if (field === 'color') {
-          const svgRoot = _svgLeafletLayer ? _svgLeafletLayer._image : null;
-          if (svgRoot) {
-            svgRoot.querySelectorAll('[style*="opacity"]').forEach(el => { el.style.opacity = ''; });
-          }
+        // Skip if a newer hover already started (prevents stale mouseleave from overwriting)
+        if (chip._hoverSeq !== _chipHoverSeq) return;
+        const svgRoot = _svgLeafletLayer ? _svgLeafletLayer._image : null;
+        if (svgRoot) {
+          svgRoot.querySelectorAll('[style*="opacity"]').forEach(svgEl => { svgEl.style.opacity = ''; });
+        }
+        if (!_svgMapOverlay) {
           const t = _resolveStyleTarget(key);
           if (t) {
-            t.elementLayers.forEach((layer, eid) => {
+            t.elementLayers.forEach((layer) => {
               try { layer.setStyle({ opacity: undefined, fillOpacity: undefined }); } catch(_) {}
             });
-            _applyColorByTagToMap(key);
+            if (field === 'color') _applyColorByTagToMap(key);
+            else _applyDynStyleField(key, field);
           }
         }
       });
+
+      // Restore chip-sel class from persistent selection state
+      const selKeyR = `${key}::${field}`;
+      const selR = _selectedChips.get(selKeyR);
+      if (selR && selR.has(val)) chip.classList.add('chip-sel');
 
       chipsEl.appendChild(chip);
     });
@@ -2970,6 +3009,16 @@ async function _generateSvgString(skipBackground = false) {
       const v = (el.tags || {})[colorByTag];
       return (v != null && v !== '') ? v : '__unknown__';
     }
+    // Stamps all active by-tag data-attributes onto an SVG shape element
+    function setElByTagAttrs(svgEl, el) {
+      const ctv = getElCtv(el); if (ctv) svgEl.setAttribute('data-ctv', ctv);
+      [['strokeWidth', 'data-swtv'], ['dotSize', 'data-dstv'], ['fillOpacity', 'data-fotv'], ['dashArray', 'data-datv']].forEach(([field, attr]) => {
+        const tagKey = qStyle[`${field}ByTag`];
+        if (!tagKey) return;
+        const v = (el.tags || {})[tagKey];
+        svgEl.setAttribute(attr, (v != null && v !== '') ? v : '__unknown__');
+      });
+    }
 
     const group = document.createElementNS(svgNS, 'g');
     group.setAttribute('id', sanitizeId(q.name) + (selectionPass ? '-sel' : ''));
@@ -3002,7 +3051,7 @@ async function _generateSvgString(skipBackground = false) {
         dot.setAttribute('stroke-width', selectionPass ? SVG_DOT_STROKE_WIDTH_SEL : SVG_DOT_STROKE_WIDTH_DEF);
         if (selectionPass) { dot.setAttribute('filter', 'url(#sel-glow)'); }
         if (elDa) dot.setAttribute('stroke-dasharray', elDa);
-        const ctv = getElCtv(el); if (ctv) dot.setAttribute('data-ctv', ctv);
+        if (!selectionPass) setElByTagAttrs(dot, el);
         const t = document.createElementNS(svgNS, 'title'); t.textContent = name; dot.appendChild(t);
         group.appendChild(dot);
         if (inclLabels && labelText)
@@ -3023,7 +3072,7 @@ async function _generateSvgString(skipBackground = false) {
           shape.setAttribute('stroke-width', selectionPass ? elSw + 1 : elSw);
           if (selectionPass) { shape.setAttribute('filter', 'url(#sel-glow)'); }
           if (elDa) shape.setAttribute('stroke-dasharray', elDa);
-          const ctv = getElCtv(el); if (ctv) shape.setAttribute('data-ctv', ctv);
+          if (!selectionPass) setElByTagAttrs(shape, el);
           if (inclLabels && labelText) {
             const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
             labelCandidates.push({ text: labelText,
@@ -3041,7 +3090,7 @@ async function _generateSvgString(skipBackground = false) {
           shape.setAttribute('stroke-width', selectionPass ? elSw + 1 : elSw);
           if (selectionPass) { shape.setAttribute('filter', 'url(#sel-glow)'); }
           if (elDa) shape.setAttribute('stroke-dasharray', elDa);
-          const ctv = getElCtv(el); if (ctv) shape.setAttribute('data-ctv', ctv);
+          if (!selectionPass) setElByTagAttrs(shape, el);
           if (inclLabels && labelText) {
             const mid = pts[Math.floor(pts.length / 2)];
             labelCandidates.push({ text: labelText, anchorX: mid.x, anchorY: mid.y, isArea: false, dotR: 0, fontSize: labelFontSize });
@@ -3076,7 +3125,7 @@ async function _generateSvgString(skipBackground = false) {
             path.setAttribute('stroke-width', selectionPass ? elSw + 1 : elSw);
             if (selectionPass) { path.setAttribute('filter', 'url(#sel-glow)'); }
             if (elDa) path.setAttribute('stroke-dasharray', elDa);
-            const ctv2 = getElCtv(el); if (ctv2) path.setAttribute('data-ctv', ctv2);
+            if (!selectionPass) setElByTagAttrs(path, el);
             const t = document.createElementNS(svgNS, 'title'); t.textContent = name; path.appendChild(t);
             rg.appendChild(path);
             if (inclLabels && labelText && outerMembers.length) {
@@ -3103,7 +3152,7 @@ async function _generateSvgString(skipBackground = false) {
             line.setAttribute('stroke-width', selectionPass ? elSw + 1 : elSw);
             if (selectionPass) { line.setAttribute('filter', 'url(#sel-glow)'); }
             if (elDa) line.setAttribute('stroke-dasharray', elDa);
-            const ctv3 = getElCtv(el); if (ctv3) line.setAttribute('data-ctv', ctv3);
+            if (!selectionPass) setElByTagAttrs(line, el);
             if (mi === 0) { const t = document.createElementNS(svgNS, 'title'); t.textContent = name; line.appendChild(t); }
             rg.appendChild(line);
           });
