@@ -2395,6 +2395,145 @@ function _getElDynValue(el, key, field) {
   return tagMap[k] !== undefined ? tagMap[k] : fallback;
 }
 
+/* ── Resolve a style key (active-N / shown-id-qi) to its data target ─── */
+function _resolveStyleTarget(key) {
+  if (key.startsWith('active-')) {
+    const qi = parseInt(key.slice(7));
+    const q  = S.queries[qi];
+    if (!q) return null;
+    return { elements: q.elements || [], elementLayers: q.elementLayers || new Map(), areaFallbacks: q.areaFallbacks || [] };
+  }
+  if (key.startsWith('shown-')) {
+    // key format: shown-{id}-{qi}  (id may contain '-', qi is always the last segment)
+    const lastDash = key.lastIndexOf('-');
+    const qi = parseInt(key.slice(lastDash + 1));
+    const id = key.slice(6, lastDash);
+    const shown = S.shownSearches[id];
+    if (!shown?.queries?.[qi]) return null;
+    const q = shown.queries[qi];
+    return { elements: q.elements || [], elementLayers: q.elementLayers || new Map(), areaFallbacks: q.areaFallbacks || [] };
+  }
+  return null;
+}
+
+/* ── Apply solid colour to all map layers for a query ────────────────── */
+function _applySvgColorToMap(key, color) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  const elMap = new Map(t.elements.map(e => [elId(e), e]));
+  t.elementLayers.forEach((layer, eid) => {
+    const el = elMap.get(eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    try {
+      if (el.type === 'node') layer.setStyle({ fillColor: color });
+      else if ((el.type === 'way' && isAreaEl(el.tags)) || isMultipolygonRelation(el)) layer.setStyle({ color, fillColor: color });
+      else layer.setStyle({ color });
+    } catch(_) {}
+  });
+  t.areaFallbacks.forEach(({ poly, fallback, eid }) => {
+    if (S.selectedIds.has(eid)) return;
+    try { poly.setStyle({ color, fillColor: color }); fallback.setStyle({ fillColor: color }); } catch(_) {}
+  });
+}
+
+/* ── Apply stroke width (ways/polys only) ──────────────────────────── */
+function _applySvgStrokeWidthToMap(key, width) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  const elMap = new Map(t.elements.map(e => [elId(e), e]));
+  t.elementLayers.forEach((layer, eid) => {
+    const el = elMap.get(eid);
+    if (!el || el.type === 'node' || S.selectedIds.has(eid)) return;
+    try { layer.setStyle({ weight: width }); } catch(_) {}
+  });
+}
+
+/* ── Apply dot radius (nodes only) ──────────────────────────────────── */
+function _applySvgDotSizeToMap(key, size) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  const elMap = new Map(t.elements.map(e => [elId(e), e]));
+  t.elementLayers.forEach((layer, eid) => {
+    const el = elMap.get(eid);
+    if (!el || el.type !== 'node' || S.selectedIds.has(eid)) return;
+    try { layer.setStyle({ radius: size }); } catch(_) {}
+  });
+}
+
+/* ── Apply fill opacity (areas only) ────────────────────────────────── */
+function _applySvgFillOpacityToMap(key, opacity) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  const elMap = new Map(t.elements.map(e => [elId(e), e]));
+  t.elementLayers.forEach((layer, eid) => {
+    const el = elMap.get(eid);
+    if (!el || S.selectedIds.has(eid)) return;
+    if ((el.type === 'way' && isAreaEl(el.tags)) || isMultipolygonRelation(el)) {
+      try { layer.setStyle({ fillOpacity: opacity }); } catch(_) {}
+    }
+  });
+}
+
+/* ── Apply dash array (ways/polys only) ─────────────────────────────── */
+function _applySvgDashArrayToMap(key, dashArray) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
+  const t = _resolveStyleTarget(key);
+  if (!t) return;
+  const elMap = new Map(t.elements.map(e => [elId(e), e]));
+  t.elementLayers.forEach((layer, eid) => {
+    const el = elMap.get(eid);
+    if (!el || el.type === 'node' || S.selectedIds.has(eid)) return;
+    try { layer.setStyle({ dashArray: dashArray || null }); } catch(_) {}
+  });
+}
+
+/* ── Show / hide a query's layer group ───────────────────────────────── */
+function _applySvgVisibilityToMap(key, visible) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
+  if (key.startsWith('active-')) {
+    const q = S.queries[parseInt(key.slice(7))];
+    if (!q?.layerGroup) return;
+    if (visible) S.map.addLayer(q.layerGroup); else S.map.removeLayer(q.layerGroup);
+  } else if (key.startsWith('shown-')) {
+    const lastDash = key.lastIndexOf('-');
+    const qi = parseInt(key.slice(lastDash + 1));
+    const id = key.slice(6, lastDash);
+    const shown = S.shownSearches[id];
+    const lg = shown?.layerGroups?.[qi];
+    if (!lg) return;
+    if (visible) S.map.addLayer(lg); else S.map.removeLayer(lg);
+  }
+}
+
+/* ── Add / remove text label markers on the Leaflet map ─────────────── */
+function _applySvgLabelsToMap(key, show, labelField, fontSize) {
+  if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
+  if (key.startsWith('active-')) {
+    const qi = parseInt(key.slice(7));
+    const q  = S.queries[qi];
+    if (!q) return;
+    if (q.labelLayerGroup) { S.map.removeLayer(q.labelLayerGroup); q.labelLayerGroup = null; }
+    if (!show) return;
+    const lg = L.layerGroup().addTo(S.map);
+    (q.elements || []).forEach(el => {
+      const name = (el.tags || {})[labelField || 'name'];
+      if (!name) return;
+      let pos;
+      if (el.type === 'node') pos = [el.lat, el.lon];
+      else if (el.type === 'way' && el.geometry?.length) { const m = Math.floor(el.geometry.length / 2); pos = [el.geometry[m].lat, el.geometry[m].lon]; }
+      if (!pos) return;
+      const icon = L.divIcon({ className: 'map-label', html: `<span style="font-size:${fontSize||11}px">${esc(name)}</span>`, iconSize: null });
+      L.marker(pos, { icon, interactive: false }).addTo(lg);
+    });
+    q.labelLayerGroup = lg;
+  }
+  // shown-* searches don't support per-query label layers in this implementation
+}
+
 function _applyStaticStyleField(key, field) {
   const qs = svgExportState.queryStyles[key] || {};
   if (field === 'strokeWidth') _applySvgStrokeWidthToMap(key, qs.strokeWidth || 2);
@@ -2407,8 +2546,9 @@ function _applyDynStyleField(key, field) {
   if (_svgMapOverlay) { _refreshSvgMapOverlay(); return; }
   const t = _resolveStyleTarget(key);
   if (!t) return;
+  const elMap = new Map(t.elements.map(e => [elId(e), e]));
   t.elementLayers.forEach((layer, eid) => {
-    const el = t.elements.find(e => elId(e) === eid);
+    const el = elMap.get(eid);
     if (!el || S.selectedIds.has(eid)) return;
     const val = _getElDynValue(el, key, field);
     try {
@@ -2440,8 +2580,9 @@ function _applyColorByTagToMap(key) {
     const effectiveKey = (v != null && v !== '') ? v : '__unknown__';
     return colorByTagMap[effectiveKey] || baseColor;
   }
+  const elMap = new Map(t.elements.map(e => [elId(e), e]));
   t.elementLayers.forEach((layer, eid) => {
-    const el = t.elements.find(e => elId(e) === eid);
+    const el = elMap.get(eid);
     if (!el || S.selectedIds.has(eid)) return;
     const c = _tagColor(el);
     try {
@@ -2456,7 +2597,7 @@ function _applyColorByTagToMap(key) {
   });
   t.areaFallbacks.forEach(({ poly, fallback, eid }) => {
     if (S.selectedIds.has(eid)) return;
-    const el = t.elements.find(e => elId(e) === eid);
+    const el = elMap.get(eid);
     const c = _tagColor(el || {});
     try { poly.setStyle({ color: c, fillColor: c }); fallback.setStyle({ fillColor: c }); } catch(_) {}
   });
