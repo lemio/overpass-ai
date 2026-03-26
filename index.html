@@ -310,14 +310,15 @@
     .svg-tag-chip:hover { box-shadow: 0 0 0 2px rgba(255,255,255,0.35); }
     .svg-tag-chip .chip-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
     .svg-tag-chip .chip-count { font-size: 8px; opacity: 0.6; margin-left: 1px; }
+    .svg-tag-chip .chip-swatch, .svg-tag-chip .chip-count { pointer-events: none; }
 
     /* qstyle-controls: 2-column grid, each cell fills half the panel */
-    .svg-qstyle-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 10px; padding: 4px 2px 2px 18px; }
-    .svg-qstyle-ctrl { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--text-1); min-width: 0; }
-    .svg-qstyle-ctrl label { color: var(--text-2); display: flex; align-items: center; gap: 3px; flex-shrink: 0; white-space: nowrap; min-width: 60px; font-size: 9.5px; }
+    .svg-qstyle-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 8px; padding: 4px 0 2px 0; }
+    .svg-qstyle-ctrl { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--text-1); min-width: 0; }
+    .svg-qstyle-ctrl label { color: var(--text-2); display: flex; align-items: center; gap: 3px; flex-shrink: 0; white-space: nowrap; min-width: 44px; font-size: 9.5px; }
     .svg-qstyle-ctrl-full { grid-column: 1 / -1; }
     /* Input controls sized consistently to fill available width */
-    .svg-qstyle-sel, .svg-qstyle-num { flex: 1; min-width: 0; font-size: 10px; padding: 3px 5px; background: var(--bg-2); color: var(--text-1); border: 1px solid var(--border); border-radius: 3px; }
+    .svg-qstyle-sel, .svg-qstyle-num { flex: 1; min-width: 0; font-size: 10px; padding: 4px 6px; background: var(--bg-2); color: var(--text-1); border: 1px solid var(--border); border-radius: 3px; }
     .svg-qstyle-num { text-align: center; }
     /* Dynamic (by-tag) button next to each control */
     .svg-dyn-btn { background: none; border: 1px solid var(--border); border-radius: 3px; color: var(--text-2); cursor: pointer; font-size: 9px; padding: 2px 4px; line-height: 1; flex-shrink: 0; transition: color .1s, border-color .1s; }
@@ -1827,13 +1828,10 @@ const svgExportState = {
 };
 let _svgTileCache = null;
 let _svgTileCacheKey = '';
-let _svgMapOverlay = null;
+let _svgMapOverlay = null;        // truthy when SVG overlay mode is active
 let _svgMapOverlayTimer = null;
 let _svgZoomWarnListener = null;  // tracks the map zoomend listener for tile-zoom warning
-let _overlayRenderNW = null;      // lat/lng NW corner recorded at last render
-let _overlayRenderSE = null;      // lat/lng SE corner recorded at last render
-let _overlayRenderW = 0;          // pixel width at last render
-let _overlayRenderH = 0;          // pixel height at last render
+let _svgLeafletLayer = null;      // L.svgOverlay instance currently shown on the map
 
 function _buildQueryRows() {
   const rows = [];
@@ -1848,46 +1846,23 @@ function _buildQueryRows() {
   return rows;
 }
 
-function _updateSvgOverlayTransform() {
-  if (!_svgMapOverlay || !_overlayRenderNW || !_overlayRenderSE) return;
-  // Compute where the NW/SE corners of the rendered SVG are in the current container
-  const nwPx = S.map.latLngToContainerPoint(_overlayRenderNW);
-  const sePx = S.map.latLngToContainerPoint(_overlayRenderSE);
-  const sx = (sePx.x - nwPx.x) / _overlayRenderW;
-  const sy = (sePx.y - nwPx.y) / _overlayRenderH;
-  // transform-origin is 0 0 so translate places the NW corner, scale stretches to SE corner
-  _svgMapOverlay.style.transform = `translate(${nwPx.x.toFixed(2)}px,${nwPx.y.toFixed(2)}px) scale(${sx.toFixed(6)},${sy.toFixed(6)})`;
-}
-
-function _resetSvgOverlayTransform() {
-  if (_svgMapOverlay) _svgMapOverlay.style.transform = '';
-}
-
-function _onSvgOverlayMoveStart() {
-  // No-op: transform tracking runs on every move event
-}
-
 function _refreshSvgMapOverlay() {
   if (!_svgMapOverlay) return;
   clearTimeout(_svgMapOverlayTimer);
   _svgMapOverlayTimer = setTimeout(async () => {
     if (!_svgMapOverlay) return;
     try {
-      _resetSvgOverlayTransform();
       const svgStr = await _generateSvgString(true);
       if (!_svgMapOverlay) return;
-      // Record the bounds so the live-transform can track movement after this render
-      const b = S.map.getBounds();
-      _overlayRenderNW = b.getNorthWest();
-      _overlayRenderSE = b.getSouthEast();
-      _overlayRenderW = document.getElementById('map').clientWidth || 800;
-      _overlayRenderH = document.getElementById('map').clientHeight || 600;
+      const bounds = S.map.getBounds();
       const parser = new DOMParser();
       const doc = parser.parseFromString(svgStr, 'image/svg+xml');
-      const svgEl = doc.documentElement;
-      svgEl.style.cssText = 'width:100%;height:100%;display:block;';
-      _svgMapOverlay.innerHTML = '';
-      _svgMapOverlay.appendChild(document.adoptNode(svgEl));
+      const svgEl = document.adoptNode(doc.documentElement);
+      // Remove previous Leaflet overlay layer before creating new one
+      if (_svgLeafletLayer) { _svgLeafletLayer.remove(); _svgLeafletLayer = null; }
+      // L.svgOverlay positions the SVG element to match geographic bounds automatically
+      _svgLeafletLayer = L.svgOverlay(svgEl, bounds, { interactive: false, opacity: 1 });
+      _svgLeafletLayer.addTo(S.map);
     } catch(e) {
       console.warn('SVG overlay refresh failed (will retry on next map event):', e);
     }
@@ -1896,17 +1871,11 @@ function _refreshSvgMapOverlay() {
 
 function _showSvgMapOverlay() {
   if (_svgMapOverlay) {
-    S.map.off('move zoom', _updateSvgOverlayTransform);
     S.map.off('moveend zoomend', _onSvgOverlayMoveEnd);
-    _svgMapOverlay.remove();
+    if (_svgLeafletLayer) { _svgLeafletLayer.remove(); _svgLeafletLayer = null; }
     _svgMapOverlay = null;
   }
-  const div = document.createElement('div');
-  div.id = 'svg-map-overlay';
-  // transform-origin 0 0 is critical for the translate+scale approach
-  div.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:400;overflow:hidden;transform-origin:0 0;';
-  document.querySelector('.map-container').appendChild(div);
-  _svgMapOverlay = div;
+  _svgMapOverlay = true;
   S.queries.forEach(q => {
     if (q.layerGroup) S.map.removeLayer(q.layerGroup);
     if (q.labelLayerGroup) S.map.removeLayer(q.labelLayerGroup);
@@ -1915,7 +1884,6 @@ function _showSvgMapOverlay() {
     (shown.layerGroups || []).forEach(lg => { if (lg) S.map.removeLayer(lg); });
     (shown.labelLayerGroups || []).forEach(lg => { if (lg) S.map.removeLayer(lg); });
   });
-  S.map.on('move zoom', _updateSvgOverlayTransform);
   S.map.on('moveend zoomend', _onSvgOverlayMoveEnd);
   _refreshSvgMapOverlay();
 }
@@ -1927,12 +1895,9 @@ function _onSvgOverlayMoveEnd() {
 function _hideSvgMapOverlay() {
   if (!_svgMapOverlay) return;
   clearTimeout(_svgMapOverlayTimer);
-  S.map.off('move zoom', _updateSvgOverlayTransform);
   S.map.off('moveend zoomend', _onSvgOverlayMoveEnd);
-  _svgMapOverlay.remove();
+  if (_svgLeafletLayer) { _svgLeafletLayer.remove(); _svgLeafletLayer = null; }
   _svgMapOverlay = null;
-  _overlayRenderNW = null;
-  _overlayRenderSE = null;
   S.queries.forEach((q, qi) => {
     const qs = svgExportState.queryStyles[`active-${qi}`];
     if (!qs || qs.visible !== false) {
@@ -2099,7 +2064,6 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
         </button>
       </div>
       <div class="svg-qstyle-controls">
-        <div class="svg-ctrl-group">Style</div>
 
         <div class="svg-qstyle-ctrl" title="Render style">
           <label>Mode</label>
@@ -2118,6 +2082,11 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
         <div class="svg-qstyle-ctrl svg-qstyle-ctrl-full${fo_dyn ? '' : ' svg-dyn-field-hidden'}" data-dynfield="fillOpacityByTag">
           <label>→ Tag</label>
           <select class="svg-qstyle-sel" data-field="fillOpacityByTag">${dynTagOpts('fillOpacityByTag', fo_dyn)}</select>
+        </div>
+
+        <div class="svg-qstyle-ctrl svg-qstyle-ctrl-full" title="Colour elements by OSM tag value">
+          <label>Colour by</label>
+          <select class="svg-qstyle-sel" data-field="colorByTag">${tagKeyOpts}</select>
         </div>
 
         <div class="svg-ctrl-group svg-poly-ctrl${showPoly ? '' : ' svg-style-hidden'}">Polygon</div>
@@ -2167,7 +2136,7 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
           <select class="svg-qstyle-sel" data-field="dotSizeByTag">${dynTagOpts('dotSizeByTag', ds_dyn)}</select>
         </div>
 
-        <div class="svg-ctrl-group">Labels &amp; Colour</div>
+        <div class="svg-ctrl-group">Labels</div>
 
         <div class="svg-qstyle-ctrl" title="Show labels">
           <label>Labels</label>
@@ -2180,11 +2149,6 @@ function _renderSvgSettings(settings, sortedTagKeys, queryRows) {
         <div class="svg-qstyle-ctrl svg-qstyle-ctrl-full svg-label-field-ctrl" style="${qs.labels?'':'display:none;'}">
           <label>Label field</label>
           <select class="svg-qstyle-sel" data-field="labelField">${lblOpts}</select>
-        </div>
-
-        <div class="svg-qstyle-ctrl svg-qstyle-ctrl-full" title="Colour elements by OSM tag value">
-          <label>Colour by</label>
-          <select class="svg-qstyle-sel" data-field="colorByTag">${tagKeyOpts}</select>
         </div>
       </div>
       <div class="svg-tag-chips" id="tagChips-${esc(key)}"></div>
@@ -2369,33 +2333,54 @@ function _buildByTagMap(key, field, tagKey) {
     if (v != null && v !== '') { counts[v] = (counts[v] || 0) + 1; }
     else { unknownCount++; }
   });
-  const sortedVals = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  // Merge __unknown__ into the counts so it sorts with others
+  const allCounts = { ...counts, '__unknown__': unknownCount };
+  const sortedVals = Object.keys(allCounts).sort((a, b) => allCounts[b] - allCounts[a]);
   const newMap = {};
   if (field === 'color') {
     let ci = 0;
-    sortedVals.forEach(v => { newMap[v] = existing[v] || COLORS[ci++ % COLORS.length]; });
-    newMap['__unknown__'] = existing['__unknown__'] || '#888888';
+    sortedVals.forEach(v => {
+      if (v === '__unknown__') {
+        newMap['__unknown__'] = existing['__unknown__'] || '#888888';
+      } else {
+        newMap[v] = existing[v] || COLORS[ci++ % COLORS.length];
+      }
+    });
   } else if (field === 'strokeWidth') {
     let base = qs.strokeWidth || 2;
-    sortedVals.forEach((v, i) => { newMap[v] = existing[v] !== undefined ? existing[v] : Math.max(0.5, base - i * 0.5); });
-    newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : base;
+    let i = 0;
+    sortedVals.forEach(v => {
+      if (v === '__unknown__') { newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : base; }
+      else { newMap[v] = existing[v] !== undefined ? existing[v] : Math.max(0.5, base - i++ * 0.5); }
+    });
   } else if (field === 'dotSize') {
     let base = qs.dotSize || 5;
-    sortedVals.forEach((v, i) => { newMap[v] = existing[v] !== undefined ? existing[v] : Math.max(2, base - i); });
-    newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : base;
+    let i = 0;
+    sortedVals.forEach(v => {
+      if (v === '__unknown__') { newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : base; }
+      else { newMap[v] = existing[v] !== undefined ? existing[v] : Math.max(2, base - i++); }
+    });
   } else if (field === 'fillOpacity') {
-    sortedVals.forEach((v, i) => { newMap[v] = existing[v] !== undefined ? existing[v] : Math.max(0, 0.8 - i * 0.1); });
-    newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : 0.1;
+    let i = 0;
+    sortedVals.forEach(v => {
+      if (v === '__unknown__') { newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : 0.1; }
+      else { newMap[v] = existing[v] !== undefined ? existing[v] : Math.max(0, 0.8 - i++ * 0.1); }
+    });
   } else if (field === 'dashArray') {
     const patterns = ['', '6,4', '2,4'];
-    sortedVals.forEach((v, i) => { newMap[v] = existing[v] !== undefined ? existing[v] : patterns[i % patterns.length]; });
-    newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : '';
+    let i = 0;
+    sortedVals.forEach(v => {
+      if (v === '__unknown__') { newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : ''; }
+      else { newMap[v] = existing[v] !== undefined ? existing[v] : patterns[i++ % patterns.length]; }
+    });
   } else {
-    sortedVals.forEach(v => { newMap[v] = existing[v] !== undefined ? existing[v] : null; });
-    newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : null;
+    sortedVals.forEach(v => {
+      if (v === '__unknown__') { newMap['__unknown__'] = existing['__unknown__'] !== undefined ? existing['__unknown__'] : null; }
+      else { newMap[v] = existing[v] !== undefined ? existing[v] : null; }
+    });
   }
   qs[mapField]    = newMap;
-  qs[countsField] = { ...counts, '__unknown__': unknownCount };
+  qs[countsField] = allCounts;
 }
 
 /* ── Apply a dynamic field value per element ───────────────────────────── */
@@ -2567,16 +2552,14 @@ function _renderTagChips(row, key) {
       // Hover: highlight matching elements in SVG overlay, dim others
       chip.addEventListener('mouseenter', () => {
         if (field === 'color') {
-          if (_svgMapOverlay) {
-            const svgRoot = _svgMapOverlay.querySelector('svg');
-            if (svgRoot) {
-              svgRoot.querySelectorAll('[data-ctv]').forEach(el => {
-                el.style.opacity = el.getAttribute('data-ctv') === val ? CHIP_HIGHLIGHT_OPACITY : CHIP_DIM_OPACITY;
-              });
-              svgRoot.querySelectorAll('g > *:not([data-ctv])').forEach(el => {
-                if (el.tagName !== 'title') el.style.opacity = CHIP_DIM_OPACITY;
-              });
-            }
+          const svgRoot = _svgLeafletLayer ? _svgLeafletLayer._image : null;
+          if (svgRoot) {
+            svgRoot.querySelectorAll('[data-ctv]').forEach(el => {
+              el.style.opacity = el.getAttribute('data-ctv') === val ? CHIP_HIGHLIGHT_OPACITY : CHIP_DIM_OPACITY;
+            });
+            svgRoot.querySelectorAll('g > *:not([data-ctv])').forEach(el => {
+              if (el.tagName !== 'title') el.style.opacity = CHIP_DIM_OPACITY;
+            });
           }
           const t = _resolveStyleTarget(key);
           if (t) {
@@ -2594,11 +2577,9 @@ function _renderTagChips(row, key) {
 
       chip.addEventListener('mouseleave', () => {
         if (field === 'color') {
-          if (_svgMapOverlay) {
-            const svgRoot = _svgMapOverlay.querySelector('svg');
-            if (svgRoot) {
-              svgRoot.querySelectorAll('[style*="opacity"]').forEach(el => { el.style.opacity = ''; });
-            }
+          const svgRoot = _svgLeafletLayer ? _svgLeafletLayer._image : null;
+          if (svgRoot) {
+            svgRoot.querySelectorAll('[style*="opacity"]').forEach(el => { el.style.opacity = ''; });
           }
           const t = _resolveStyleTarget(key);
           if (t) {
