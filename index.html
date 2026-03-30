@@ -576,7 +576,8 @@ const STYLE = {
   LINE_WEIGHT_SEL:  4,
   LINE_WEIGHT_HL:   4.5,
   POLY_WEIGHT:      2,
-  POLY_FILL_OPACITY: 0.18,
+  POLY_FILL_OPACITY:    0.18,
+  POLY_FILL_OPACITY_HL: 0.38,
 };
 
 const EXAMPLES = [
@@ -1541,7 +1542,7 @@ function hlLayer(layer, type, on, color) {
     } else if (layer.options?.fill) {
       // Polygon/area layer (way areas and relation multipolygons) — also highlight the fill
       layer.setStyle(on
-        ? { weight: STYLE.LINE_WEIGHT_HL, fillOpacity: 0.38, opacity: 1 }
+        ? { weight: STYLE.LINE_WEIGHT_HL, fillOpacity: STYLE.POLY_FILL_OPACITY_HL, opacity: 1 }
         : { weight: STYLE.POLY_WEIGHT, fillOpacity: STYLE.POLY_FILL_OPACITY, opacity: 0.8 });
     } else {
       layer.setStyle({ weight: on ? STYLE.LINE_WEIGHT_HL : STYLE.LINE_WEIGHT, opacity: on ? 1 : 0.8 });
@@ -3039,7 +3040,7 @@ function _renderTagChips(row, key) {
             svgEl.style.opacity = svgEl.getAttribute(attr) === val ? CHIP_HIGHLIGHT_OPACITY : CHIP_DIM_OPACITY;
           });
           svgRoot.querySelectorAll(`g > *:not([${attr}])`).forEach(svgEl => {
-            if (svgEl.tagName !== 'title') svgEl.style.opacity = CHIP_DIM_OPACITY;
+            if (svgEl.tagName !== 'title' && !svgEl.closest(`[${attr}]`)) svgEl.style.opacity = CHIP_DIM_OPACITY;
           });
         }
         if (!_svgMapOverlay) {
@@ -3419,6 +3420,7 @@ async function _generateSvgString(skipBackground = false) {
         if (!wayMembers.length) return;
         const rg = document.createElementNS(svgNS, 'g');
         rg.setAttribute('id', sid);
+        if (!selectionPass) setElByTagAttrs(rg, el);
         if (isMultipolygonRelation(el)) {
           const outerMembers = wayMembers.filter(m => !m.role || m.role === 'outer');
           const innerMembers = wayMembers.filter(m => m.role === 'inner');
@@ -3441,7 +3443,6 @@ async function _generateSvgString(skipBackground = false) {
             path.setAttribute('stroke-width', selectionPass ? elSw + 1 : elSw);
             if (selectionPass) { path.setAttribute('filter', 'url(#sel-glow)'); }
             if (elDa) path.setAttribute('stroke-dasharray', elDa);
-            if (!selectionPass) setElByTagAttrs(path, el);
             const t = document.createElementNS(svgNS, 'title'); t.textContent = name; path.appendChild(t);
             rg.appendChild(path);
             if (inclLabels && labelText && outerMembers.length) {
@@ -3468,7 +3469,6 @@ async function _generateSvgString(skipBackground = false) {
             line.setAttribute('stroke-width', selectionPass ? elSw + 1 : elSw);
             if (selectionPass) { line.setAttribute('filter', 'url(#sel-glow)'); }
             if (elDa) line.setAttribute('stroke-dasharray', elDa);
-            if (!selectionPass) setElByTagAttrs(line, el);
             if (mi === 0) { const t = document.createElementNS(svgNS, 'title'); t.textContent = name; line.appendChild(t); }
             rg.appendChild(line);
           });
