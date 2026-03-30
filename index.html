@@ -1103,7 +1103,7 @@ const _tooltipCaption = () => document.getElementById('wikiImgTooltipCaption');
 // Margin (px) between tooltip edge and viewport edge / anchor element
 const TOOLTIP_MARGIN = 8;
 
-function _showImgTooltip(src, caption, tagLabel, anchorEl) {
+function _showImgTooltip(src, caption, tagLabel, anchorEl, placement) {
   const tt = _tooltip();
   if (!tt) return;
   const tImg = _tooltipImg();
@@ -1111,7 +1111,8 @@ function _showImgTooltip(src, caption, tagLabel, anchorEl) {
   tImg.alt = tagLabel || '';
   _tooltipCaption().textContent = caption || '';
   tt.classList.add('visible');
-  _positionTooltip(tt, anchorEl);
+  if (placement === 'above') _positionTooltipAbove(tt, anchorEl);
+  else _positionTooltip(tt, anchorEl);
 }
 
 function _hideImgTooltip() {
@@ -1130,6 +1131,27 @@ function _positionTooltip(tt, anchorEl) {
   let top  = rect.top;
   if (left + ttW > vw - TOOLTIP_MARGIN)  left = rect.left - ttW - TOOLTIP_MARGIN;
   if (top  + ttH > vh - TOOLTIP_MARGIN)  top  = vh - ttH - TOOLTIP_MARGIN;
+  if (top < TOOLTIP_MARGIN) top = TOOLTIP_MARGIN;
+  tt.style.left = `${left}px`;
+  tt.style.top  = `${top}px`;
+}
+
+// Position the tooltip above the anchor element, centered horizontally.
+// Falls back to below the anchor when there is not enough room above.
+function _positionTooltipAbove(tt, anchorEl) {
+  const rect = anchorEl.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const ttRect = tt.getBoundingClientRect();
+  const ttW = ttRect.width  || 268;
+  const ttH = ttRect.height || 210;
+  let left = rect.left + (rect.width - ttW) / 2;
+  let top  = rect.top - ttH - TOOLTIP_MARGIN;
+  // Clamp horizontally within the viewport
+  if (left + ttW > vw - TOOLTIP_MARGIN) left = vw - ttW - TOOLTIP_MARGIN;
+  if (left < TOOLTIP_MARGIN) left = TOOLTIP_MARGIN;
+  // If no room above, show below instead
+  if (top < TOOLTIP_MARGIN) top = rect.bottom + TOOLTIP_MARGIN;
+  if (top + ttH > vh - TOOLTIP_MARGIN) top = vh - ttH - TOOLTIP_MARGIN;
   if (top < TOOLTIP_MARGIN) top = TOOLTIP_MARGIN;
   tt.style.left = `${left}px`;
   tt.style.top  = `${top}px`;
@@ -1172,6 +1194,7 @@ async function _attachWikiThumb(d, t) {
  * Asynchronously fetch a wiki image for tagStr ("key=value" or "key") and, if one
  * exists, attach mouseenter/mouseleave listeners on chip to show/hide the tooltip.
  * Safe to call for every chip — exits silently when no image is available.
+ * The tooltip is positioned above the row header so it does not cover sibling chips.
  */
 async function _addChipWikiTooltip(chip, tagStr) {
   if (!tagStr || tagStr.includes('__unknown__')) return;
@@ -1180,7 +1203,13 @@ async function _addChipWikiTooltip(chip, tagStr) {
   const cache = _getImgCache();
   const entry = cache[tagStr] || {};
   const caption = (entry.fileTitle || '').replace(/^File:/, '').replace(/\.[^.]+$/, '');
-  chip.addEventListener('mouseenter', () => _showImgTooltip(thumbSrc, caption, tagStr, chip));
+  // Resolve the row-header element once at setup time so the tooltip appears
+  // above the header and does not obscure sibling chips.
+  const csvRow = chip.closest('.csv-field-row');
+  const headerEl = csvRow?.querySelector('.csv-field-header')
+                || chip.closest('.svg-qstyle-row')?.querySelector('.svg-qstyle-header')
+                || chip;
+  chip.addEventListener('mouseenter', () => _showImgTooltip(thumbSrc, caption, tagStr, headerEl, 'above'));
   chip.addEventListener('mouseleave', _hideImgTooltip);
 }
 
