@@ -1061,10 +1061,11 @@ async function fetchWikiTagImage(tagStr, wikiUrl) {
   cache[tagStr] = { url: null, ts: Date.now() };
 
   try {
-    // Step 1 — query the page image (representative/featured) AND the image list in one call.
-    // `prop=pageimages` returns the page's canonical representative image (set by {{Photo}} etc.)
-    // which is far more descriptive than a random image further down the page.
-    const listUrl = `https://wiki.openstreetmap.org/w/api.php?action=query&titles=${encodeURIComponent(pageTitle)}&prop=pageimages|images&imlimit=10&piprop=original|thumbnail&pithumbsize=200&format=json&origin=*`;
+    // Step 1 — get page properties (for the featured image) AND the image list in one call.
+    // `prop=pageprops` stores the page's representative image filename in `page_image_free`
+    // or `page_image` (set by templates such as {{Photo}} on OSM wiki pages).
+    // Note: `pageimages` is not available on the OSM wiki; `pageprops` is the correct endpoint.
+    const listUrl = `https://wiki.openstreetmap.org/w/api.php?action=query&titles=${encodeURIComponent(pageTitle)}&prop=pageprops|images&imlimit=10&format=json&origin=*`;
     const res1 = await fetch(listUrl);
     if (!res1.ok) throw new Error('images list failed');
     const d1 = await res1.json();
@@ -1073,24 +1074,23 @@ async function fetchWikiTagImage(tagStr, wikiUrl) {
 
     const page1 = pages1[0];
 
-    // Prefer the featured page image when available
-    const piThumb  = page1.thumbnail?.source || null;
-    const piOrig   = page1.original?.source  || piThumb;
-    const piTitle  = page1.pageimage ? `File:${page1.pageimage}` : null;
-    if (piThumb) {
-      cache[tagStr] = { url: piThumb, origUrl: piOrig, fileTitle: piTitle || '', ts: Date.now() };
-      _saveImgCache();
-      return piThumb;
+    // pageprops may carry the canonical representative image filename (without "File:" prefix)
+    const props = page1.pageprops || {};
+    const ppImageName = props.page_image_free || props.page_image || null;
+
+    // Determine which file to resolve: featured image (preferred) or first suitable candidate
+    let fileTitle;
+    if (ppImageName) {
+      fileTitle = `File:${ppImageName}`;
+    } else {
+      const candidates = (page1.images || [])
+        .map(img => img.title)
+        .filter(t => _PHOTO_EXT_RE.test(t) && !_SKIP_NAME_RE.test(t));
+      if (!candidates.length) { _saveImgCache(); return null; }
+      fileTitle = candidates[0];
     }
 
-    // Fall back to the first suitable image from the images list
-    const candidates = (page1.images || [])
-      .map(img => img.title)
-      .filter(t => _PHOTO_EXT_RE.test(t) && !_SKIP_NAME_RE.test(t));
-    if (!candidates.length) { _saveImgCache(); return null; }
-
-    // Step 2 — resolve a 200-px thumbnail URL for the first candidate
-    const fileTitle = candidates[0];
+    // Step 2 — resolve a 200-px thumbnail URL for the chosen file
     const thumbUrl = `https://wiki.openstreetmap.org/w/api.php?action=query&titles=${encodeURIComponent(fileTitle)}&prop=imageinfo&iiprop=url|thumburl&iiurlwidth=200&format=json&origin=*`;
     const res2 = await fetch(thumbUrl);
     if (!res2.ok) throw new Error('imageinfo failed');
