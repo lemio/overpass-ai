@@ -3390,12 +3390,15 @@ async function _generateSvgString(skipBackground = false) {
           if (!selectionPass) setElByTagAttrs(shape, el);
           if (inclLabels && labelText) {
             const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+            let minX = xs[0], maxX = xs[0], minY = ys[0], maxY = ys[0];
+            for (let i = 1; i < xs.length; i++) { if (xs[i] < minX) minX = xs[i]; if (xs[i] > maxX) maxX = xs[i]; }
+            for (let i = 1; i < ys.length; i++) { if (ys[i] < minY) minY = ys[i]; if (ys[i] > maxY) maxY = ys[i]; }
             labelCandidates.push({ text: labelText,
-              anchorX: (Math.min(...xs) + Math.max(...xs)) / 2,
-              anchorY: (Math.min(...ys) + Math.max(...ys)) / 2,
+              anchorX: (minX + maxX) / 2,
+              anchorY: (minY + maxY) / 2,
               isArea: true, dotR: 0,
-              areaMinX: Math.min(...xs), areaMinY: Math.min(...ys),
-              areaMaxX: Math.max(...xs), areaMaxY: Math.max(...ys), fontSize: labelFontSize });
+              areaMinX: minX, areaMinY: minY,
+              areaMaxX: maxX, areaMaxY: maxY, fontSize: labelFontSize });
           }
         } else {
           shape = document.createElementNS(svgNS, 'polyline');
@@ -3449,12 +3452,15 @@ async function _generateSvgString(skipBackground = false) {
               const allPts = outerMembers.flatMap(m => m.geometry.map(p => geoToSvg(p.lat, p.lon)));
               if (allPts.length) {
                 const xs = allPts.map(p => p.x), ys = allPts.map(p => p.y);
+                let minX = xs[0], maxX = xs[0], minY = ys[0], maxY = ys[0];
+                for (let i = 1; i < xs.length; i++) { if (xs[i] < minX) minX = xs[i]; if (xs[i] > maxX) maxX = xs[i]; }
+                for (let i = 1; i < ys.length; i++) { if (ys[i] < minY) minY = ys[i]; if (ys[i] > maxY) maxY = ys[i]; }
                 labelCandidates.push({ text: labelText,
-                  anchorX: (Math.min(...xs) + Math.max(...xs)) / 2,
-                  anchorY: (Math.min(...ys) + Math.max(...ys)) / 2,
+                  anchorX: (minX + maxX) / 2,
+                  anchorY: (minY + maxY) / 2,
                   isArea: true, dotR: 0,
-                  areaMinX: Math.min(...xs), areaMinY: Math.min(...ys),
-                  areaMaxX: Math.max(...xs), areaMaxY: Math.max(...ys), fontSize: labelFontSize });
+                  areaMinX: minX, areaMinY: minY,
+                  areaMaxX: maxX, areaMaxY: maxY, fontSize: labelFontSize });
               }
             }
           }
