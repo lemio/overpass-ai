@@ -145,11 +145,38 @@
     }
 
     /* ── Wiki references ────────────────────────────────────────── */
-    .wiki-ref { padding: 8px; background: var(--bg-2); border-radius: var(--radius); margin-bottom: 6px; border-left: 2px solid var(--accent); }
+    .wiki-ref { padding: 8px; background: var(--bg-2); border-radius: var(--radius); margin-bottom: 6px; border-left: 2px solid var(--accent); position: relative; }
     .wiki-tag { font-size: 11px; font-weight: 700; font-family: 'SF Mono', 'Consolas', monospace; margin-bottom: 3px; }
     .wiki-tag a { color: var(--accent); text-decoration: none; }
     .wiki-tag a:hover { text-decoration: underline; }
     .wiki-desc { font-size: 11px; color: var(--text-1); line-height: 1.45; }
+
+    /* ── Wiki image thumbnails ───────────────────────────────────── */
+    .wiki-ref-body { display: flex; align-items: flex-start; gap: 8px; }
+    .wiki-ref-text { flex: 1; min-width: 0; }
+    .wiki-thumb-wrap { flex-shrink: 0; position: relative; }
+    .wiki-thumb {
+      width: 54px; height: 40px; object-fit: cover; border-radius: 2px;
+      border: 1px solid var(--border-mid); display: block; cursor: pointer;
+      background: var(--bg-3); transition: opacity .15s;
+    }
+    .wiki-thumb:hover { opacity: 0.85; }
+    .wiki-thumb-loading {
+      width: 54px; height: 40px; border-radius: 2px; border: 1px solid var(--border);
+      background: var(--bg-3); display: flex; align-items: center; justify-content: center;
+    }
+    .wiki-thumb-loading .spinner { width: 10px; height: 10px; margin: 0; }
+
+    /* Hover tooltip showing the full-size image */
+    .wiki-img-tooltip {
+      display: none; position: fixed; z-index: 9990;
+      background: var(--bg-1); border: 1px solid var(--border-mid);
+      border-radius: 4px; box-shadow: 0 4px 16px rgba(0,0,0,.7);
+      padding: 4px; pointer-events: none; max-width: 260px;
+    }
+    .wiki-img-tooltip.visible { display: block; }
+    .wiki-img-tooltip img { display: block; max-width: 252px; max-height: 180px; object-fit: contain; border-radius: 2px; }
+    .wiki-img-tooltip-caption { font-size: 10px; color: var(--text-2); margin-top: 4px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 252px; }
 
     /* ── Map ────────────────────────────────────────────────────── */
     .map-container { flex: 1; position: relative; isolation: isolate; }
@@ -464,6 +491,12 @@
   </div>
 
 </div><!-- /app -->
+
+<!-- Wiki image hover tooltip -->
+<div class="wiki-img-tooltip" id="wikiImgTooltip">
+  <img id="wikiImgTooltipImg" src="" alt="" />
+  <div class="wiki-img-tooltip-caption" id="wikiImgTooltipCaption"></div>
+</div>
 
 <!-- Settings modal -->
 <div class="modal-overlay" id="settingsOverlay">
@@ -963,6 +996,233 @@ async function checkWikiTags(queries) {
   } catch (_) {
     return []; // If the check fails, assume all tags are valid
   }
+}
+
+/* ── Wiki image cache & fetching ────────────────────────────────── */
+const IMG_CACHE_LS_KEY = 'wiki_img_cache';
+const IMG_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// In-memory cache (populated lazily from localStorage)
+let _imgCache = null;
+
+function _loadImgCache() {
+  try {
+    const raw = localStorage.getItem(IMG_CACHE_LS_KEY);
+    if (!raw) return {};
+    const data = JSON.parse(raw);
+    // Prune stale entries
+    const now = Date.now();
+    const clean = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (v && typeof v.ts === 'number' && (now - v.ts) < IMG_CACHE_TTL_MS) clean[k] = v;
+    }
+    return clean;
+  } catch (_) { return {}; }
+}
+
+function _saveImgCache() {
+  try { localStorage.setItem(IMG_CACHE_LS_KEY, JSON.stringify(_imgCache)); } catch (_) {}
+}
+
+function _getImgCache() {
+  if (!_imgCache) _imgCache = _loadImgCache();
+  return _imgCache;
+}
+
+// Filename extensions considered real photos (skip icon/logo SVGs)
+const _PHOTO_EXT_RE = /\.(jpe?g|png|gif|webp|avif)$/i;
+const _SKIP_NAME_RE = /\b(icon|logo|map|osm|maki|carto|symbol|pictogram|marker|shield)\b/i;
+
+/**
+ * Fetch a thumbnail URL for an OSM tag from the OSM wiki.
+ * Returns the thumb URL (string) or null if no suitable image was found.
+ * Results are cached in localStorage for IMG_CACHE_TTL_MS.
+ */
+async function fetchWikiTagImage(tagStr, wikiUrl) {
+  const cache = _getImgCache();
+
+  // Return cached result immediately (null means "already checked, no image")
+  if (Object.prototype.hasOwnProperty.call(cache, tagStr)) {
+    return cache[tagStr].url || null;
+  }
+
+  // Determine the OSM wiki page title
+  let pageTitle;
+  const urlMatch = (wikiUrl || '').match(/wiki\.openstreetmap\.org\/wiki\/(.+)$/);
+  if (urlMatch) {
+    pageTitle = decodeURIComponent(urlMatch[1]);
+  } else if (tagStr.includes('=')) {
+    pageTitle = `Tag:${tagStr}`;
+  } else {
+    pageTitle = `Key:${tagStr}`;
+  }
+
+  // Optimistically write a placeholder so concurrent calls don't double-fetch
+  cache[tagStr] = { url: null, ts: Date.now() };
+
+  try {
+    // Step 1 — get page properties (for the featured image) AND the image list in one call.
+    // `prop=pageprops` stores the page's representative image filename in `page_image_free`
+    // or `page_image` (set by templates such as {{Photo}} on OSM wiki pages).
+    // Note: `pageimages` is not available on the OSM wiki; `pageprops` is the correct endpoint.
+    const listUrl = `https://wiki.openstreetmap.org/w/api.php?action=query&titles=${encodeURIComponent(pageTitle)}&prop=pageprops|images&imlimit=10&format=json&origin=*`;
+    const res1 = await fetch(listUrl);
+    if (!res1.ok) throw new Error('images list failed');
+    const d1 = await res1.json();
+    const pages1 = Object.values(d1.query?.pages || {});
+    if (!pages1.length || 'missing' in pages1[0]) { _saveImgCache(); return null; }
+
+    const page1 = pages1[0];
+
+    // pageprops may carry the canonical representative image filename (without "File:" prefix)
+    const props = page1.pageprops || {};
+    const ppImageName = props.page_image_free || props.page_image || null;
+
+    // Determine which file to resolve: featured image (preferred) or first suitable candidate
+    let fileTitle;
+    if (ppImageName) {
+      fileTitle = `File:${ppImageName}`;
+    } else {
+      const candidates = (page1.images || [])
+        .map(img => img.title)
+        .filter(t => _PHOTO_EXT_RE.test(t) && !_SKIP_NAME_RE.test(t));
+      if (!candidates.length) { _saveImgCache(); return null; }
+      fileTitle = candidates[0];
+    }
+
+    // Step 2 — resolve a 200-px thumbnail URL for the chosen file
+    const thumbUrl = `https://wiki.openstreetmap.org/w/api.php?action=query&titles=${encodeURIComponent(fileTitle)}&prop=imageinfo&iiprop=url|thumburl&iiurlwidth=200&format=json&origin=*`;
+    const res2 = await fetch(thumbUrl);
+    if (!res2.ok) throw new Error('imageinfo failed');
+    const d2 = await res2.json();
+    const page2 = Object.values(d2.query?.pages || {})[0];
+    const info = page2?.imageinfo?.[0];
+    const thumb = info?.thumburl || info?.url || null;
+    const origUrl = info?.url || null;
+
+    cache[tagStr] = { url: thumb, origUrl, fileTitle, ts: Date.now() };
+    _saveImgCache();
+    return thumb;
+  } catch (_) {
+    cache[tagStr] = { url: null, ts: Date.now() };
+    _saveImgCache();
+    return null;
+  }
+}
+
+/* ── Wiki image tooltip helpers ─────────────────────────────────── */
+const _tooltip = () => document.getElementById('wikiImgTooltip');
+const _tooltipImg = () => document.getElementById('wikiImgTooltipImg');
+const _tooltipCaption = () => document.getElementById('wikiImgTooltipCaption');
+
+// Margin (px) between tooltip edge and viewport edge / anchor element
+const TOOLTIP_MARGIN = 8;
+// Fallback tooltip dimensions used before the element has been rendered
+const TOOLTIP_DEFAULT_W = 268;
+const TOOLTIP_DEFAULT_H = 210;
+
+function _showImgTooltip(src, caption, tagLabel, anchorEl, placement) {
+  const tt = _tooltip();
+  if (!tt) return;
+  const tImg = _tooltipImg();
+  tImg.src = src;
+  tImg.alt = tagLabel || '';
+  _tooltipCaption().textContent = caption || '';
+  tt.classList.add('visible');
+  if (placement === 'above') _positionTooltipAbove(tt, anchorEl);
+  else _positionTooltip(tt, anchorEl);
+}
+
+function _hideImgTooltip() {
+  const tt = _tooltip();
+  if (tt) tt.classList.remove('visible');
+}
+
+function _positionTooltip(tt, anchorEl) {
+  const rect = anchorEl.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // Measure actual rendered dimensions so position stays accurate if CSS changes
+  const ttRect = tt.getBoundingClientRect();
+  const ttW = ttRect.width  || TOOLTIP_DEFAULT_W;
+  const ttH = ttRect.height || TOOLTIP_DEFAULT_H;
+  let left = rect.right + TOOLTIP_MARGIN;
+  let top  = rect.top;
+  if (left + ttW > vw - TOOLTIP_MARGIN)  left = rect.left - ttW - TOOLTIP_MARGIN;
+  if (top  + ttH > vh - TOOLTIP_MARGIN)  top  = vh - ttH - TOOLTIP_MARGIN;
+  if (top < TOOLTIP_MARGIN) top = TOOLTIP_MARGIN;
+  tt.style.left      = `${left}px`;
+  tt.style.top       = `${top}px`;
+  // Reset any transform set by _positionTooltipAbove to avoid bleed-over
+  // when the same tooltip element is reused with a different placement.
+  tt.style.transform = '';
+}
+
+// Position the tooltip so its bottom-left corner is anchored to the top-left
+// of the anchor element.  The tooltip renders upward from that point.
+// Uses CSS transform so the anchor is stable regardless of the tooltip's height
+// (which is unknown at hover time because the image may not have loaded yet).
+function _positionTooltipAbove(tt, anchorEl) {
+  const rect = anchorEl.getBoundingClientRect();
+  tt.style.left      = `${rect.left}px`;
+  tt.style.top       = `${rect.top - TOOLTIP_MARGIN}px`;
+  tt.style.transform = 'translateY(-100%)';
+}
+
+/**
+ * Fetch a wiki image for tag t and wire up the thumbnail + tooltip on the wiki-ref element d.
+ */
+async function _attachWikiThumb(d, t) {
+  const wrap = d.querySelector('.wiki-thumb-wrap');
+  if (!wrap) return;
+
+  const thumbSrc = await fetchWikiTagImage(t.tag, t.url);
+  if (!thumbSrc) {
+    // No image available — remove the loading placeholder
+    wrap.innerHTML = '';
+    return;
+  }
+
+  const cache = _getImgCache();
+  const entry = cache[t.tag] || {};
+  const caption = (entry.fileTitle || '').replace(/^File:/, '').replace(/\.[^.]+$/, '');
+
+  wrap.innerHTML = `<img class="wiki-thumb" src="${esc(thumbSrc)}" alt="${esc(t.tag)}" title="Click to open image" />`;
+  const img = wrap.querySelector('.wiki-thumb');
+
+  // Hover → show tooltip (alt text carries the tag label for accessibility)
+  img.addEventListener('mouseenter', () => _showImgTooltip(thumbSrc, caption, t.tag, img));
+  img.addEventListener('mouseleave', _hideImgTooltip);
+
+  // Click → open full image in new tab (use origUrl if available)
+  const origUrl = entry.origUrl || thumbSrc;
+  img.addEventListener('click', e => {
+    e.stopPropagation();
+    window.open(origUrl, '_blank', 'noopener,noreferrer');
+  });
+}
+
+/**
+ * Asynchronously fetch a wiki image for tagStr ("key=value" or "key") and, if one
+ * exists, attach mouseenter/mouseleave listeners on chip to show/hide the tooltip.
+ * Safe to call for every chip — exits silently when no image is available.
+ * The tooltip is anchored above the nearest chips container so it does not
+ * obscure sibling chips and appears close to the hovered element.
+ */
+async function _addChipWikiTooltip(chip, tagStr) {
+  if (!tagStr || tagStr.includes('__unknown__')) return;
+  const thumbSrc = await fetchWikiTagImage(tagStr);
+  if (!thumbSrc) return;
+  const cache = _getImgCache();
+  const entry = cache[tagStr] || {};
+  const caption = (entry.fileTitle || '').replace(/^File:/, '').replace(/\.[^.]+$/, '');
+  // CSV chips: anchor above the field header row so the tooltip clears the chip list.
+  // SVG chips: chips live in .svg-tag-chips at the bottom of the row — anchor there
+  //            rather than the distant .svg-qstyle-header at the top of the row.
+  const anchorEl = chip.closest('.csv-field-row')?.querySelector('.csv-field-header')
+                || chip.closest('.svg-tag-chips')
+                || chip;
+  chip.addEventListener('mouseenter', () => _showImgTooltip(thumbSrc, caption, tagStr, anchorEl, 'above'));
+  chip.addEventListener('mouseleave', _hideImgTooltip);
 }
 
 /* ── Overpass execution ─────────────────────────────────────────── */
@@ -1538,8 +1798,20 @@ function renderQueryOutput(explanation, queries) {
     allTags.forEach(t => {
       const d = document.createElement('div');
       d.className = 'wiki-ref';
-      d.innerHTML = `<div class="wiki-tag"><a href="${safeUrl(t.url)}" target="_blank" rel="noopener noreferrer">${esc(t.tag)}</a></div><div class="wiki-desc">${esc(t.description)}</div>`;
+      d.innerHTML = `
+        <div class="wiki-ref-body">
+          <div class="wiki-ref-text">
+            <div class="wiki-tag"><a href="${safeUrl(t.url)}" target="_blank" rel="noopener noreferrer">${esc(t.tag)}</a></div>
+            <div class="wiki-desc">${esc(t.description)}</div>
+          </div>
+          <div class="wiki-thumb-wrap">
+            <div class="wiki-thumb-loading" data-tag="${esc(t.tag)}"><div class="spinner"></div></div>
+          </div>
+        </div>`;
       wikiList.appendChild(d);
+
+      // Asynchronously fetch and attach the thumbnail
+      _attachWikiThumb(d, t);
     });
   } else {
     document.getElementById('wikiSection').style.display = 'none';
@@ -1715,6 +1987,7 @@ function openCsvExport() {
     chip.addEventListener('mouseenter', () => highlightByTagValue(chip.dataset.key, chip.dataset.value));
     chip.addEventListener('mouseleave', clearTagHighlight);
     chip.addEventListener('click', () => selectByTagValue(chip.dataset.key, chip.dataset.value, chip));
+    _addChipWikiTooltip(chip, `${chip.dataset.key}=${chip.dataset.value}`);
   });
 
   openCsvView();
@@ -2772,6 +3045,7 @@ function _renderTagChips(row, key) {
       if (selR && selR.has(val)) chip.classList.add('chip-sel');
 
       chipsEl.appendChild(chip);
+      if (!isUnknown) _addChipWikiTooltip(chip, `${tagKey}=${val}`);
     });
   });
 }
@@ -3396,6 +3670,31 @@ async function exportSessionZip() {
       zip.file('view.svg', svgStr);
     } catch(_) { /* skip SVG if generation fails */ }
 
+    // 8. Cached wiki images (embed as data-URIs for offline use)
+    try {
+      const cache = _getImgCache();
+      const imgMeta = {}; // tag → { fileTitle, origUrl }
+      const imgFolder = zip.folder('images');
+      const fetchPromises = Object.entries(cache)
+        .filter(([, v]) => v && v.url)
+        .map(async ([tag, v]) => {
+          try {
+            const resp = await fetch(v.url);
+            if (!resp.ok) return;
+            const blob = await resp.blob();
+            const ext = (v.fileTitle || 'image.jpg').split('.').pop().toLowerCase() || 'jpg';
+            // Use a safe filename derived from the tag key
+            const safeName = tag.replace(/[^a-zA-Z0-9_=-]/g, '_') + '.' + ext;
+            imgMeta[tag] = { fileTitle: v.fileTitle || '', origUrl: v.origUrl || v.url, file: `images/${safeName}` };
+            imgFolder.file(safeName, blob);
+          } catch (_) { /* skip images that can't be fetched */ }
+        });
+      await Promise.all(fetchPromises);
+      if (Object.keys(imgMeta).length) {
+        zip.file('images/index.json', JSON.stringify(imgMeta, null, 2));
+      }
+    } catch(_) { /* skip images on error */ }
+
     const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
     downloadBlob(blob, `overpass-ai-session-${Date.now()}.zip`, 'application/zip');
     setStatus('Session exported');
@@ -3500,6 +3799,31 @@ async function importSessionZip(file) {
           persistSavedSearches();
           renderSavedSearches();
         }
+      } catch(_) {}
+    }
+
+    // Restore cached wiki images from the images/ folder
+    const imgIndexFile = zip.file('images/index.json');
+    if (imgIndexFile) {
+      try {
+        const imgMeta = JSON.parse(await imgIndexFile.async('string'));
+        const cache = _getImgCache();
+        const now = Date.now();
+        for (const [tag, meta] of Object.entries(imgMeta)) {
+          if (meta.file && zip.file(meta.file)) {
+            const imgBlob = await zip.file(meta.file).async('blob');
+            const dataUrl = await new Promise(resolve => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result);
+              reader.onerror = () => resolve(null);
+              reader.readAsDataURL(imgBlob);
+            });
+            if (dataUrl) {
+              cache[tag] = { url: dataUrl, origUrl: meta.origUrl || dataUrl, fileTitle: meta.fileTitle || '', ts: now };
+            }
+          }
+        }
+        _saveImgCache();
       } catch(_) {}
     }
 
