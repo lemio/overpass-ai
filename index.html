@@ -1061,15 +1061,30 @@ async function fetchWikiTagImage(tagStr, wikiUrl) {
   cache[tagStr] = { url: null, ts: Date.now() };
 
   try {
-    // Step 1 — get the list of images used on the wiki page
-    const listUrl = `https://wiki.openstreetmap.org/w/api.php?action=query&titles=${encodeURIComponent(pageTitle)}&prop=images&imlimit=10&format=json&origin=*`;
+    // Step 1 — query the page image (representative/featured) AND the image list in one call.
+    // `prop=pageimages` returns the page's canonical representative image (set by {{Photo}} etc.)
+    // which is far more descriptive than a random image further down the page.
+    const listUrl = `https://wiki.openstreetmap.org/w/api.php?action=query&titles=${encodeURIComponent(pageTitle)}&prop=pageimages|images&imlimit=10&piprop=original|thumbnail&pithumbsize=200&format=json&origin=*`;
     const res1 = await fetch(listUrl);
     if (!res1.ok) throw new Error('images list failed');
     const d1 = await res1.json();
     const pages1 = Object.values(d1.query?.pages || {});
     if (!pages1.length || 'missing' in pages1[0]) { _saveImgCache(); return null; }
 
-    const candidates = (pages1[0].images || [])
+    const page1 = pages1[0];
+
+    // Prefer the featured page image when available
+    const piThumb  = page1.thumbnail?.source || null;
+    const piOrig   = page1.original?.source  || piThumb;
+    const piTitle  = page1.pageimage ? `File:${page1.pageimage}` : null;
+    if (piThumb) {
+      cache[tagStr] = { url: piThumb, origUrl: piOrig, fileTitle: piTitle || '', ts: Date.now() };
+      _saveImgCache();
+      return piThumb;
+    }
+
+    // Fall back to the first suitable image from the images list
+    const candidates = (page1.images || [])
       .map(img => img.title)
       .filter(t => _PHOTO_EXT_RE.test(t) && !_SKIP_NAME_RE.test(t));
     if (!candidates.length) { _saveImgCache(); return null; }
@@ -1102,6 +1117,9 @@ const _tooltipCaption = () => document.getElementById('wikiImgTooltipCaption');
 
 // Margin (px) between tooltip edge and viewport edge / anchor element
 const TOOLTIP_MARGIN = 8;
+// Fallback tooltip dimensions used before the element has been rendered
+const TOOLTIP_DEFAULT_W = 268;
+const TOOLTIP_DEFAULT_H = 210;
 
 function _showImgTooltip(src, caption, tagLabel, anchorEl, placement) {
   const tt = _tooltip();
@@ -1125,8 +1143,8 @@ function _positionTooltip(tt, anchorEl) {
   const vw = window.innerWidth, vh = window.innerHeight;
   // Measure actual rendered dimensions so position stays accurate if CSS changes
   const ttRect = tt.getBoundingClientRect();
-  const ttW = ttRect.width  || 268;
-  const ttH = ttRect.height || 210;
+  const ttW = ttRect.width  || TOOLTIP_DEFAULT_W;
+  const ttH = ttRect.height || TOOLTIP_DEFAULT_H;
   let left = rect.right + TOOLTIP_MARGIN;
   let top  = rect.top;
   if (left + ttW > vw - TOOLTIP_MARGIN)  left = rect.left - ttW - TOOLTIP_MARGIN;
@@ -1136,25 +1154,14 @@ function _positionTooltip(tt, anchorEl) {
   tt.style.top  = `${top}px`;
 }
 
-// Position the tooltip above the anchor element, centered horizontally.
-// Falls back to below the anchor when there is not enough room above.
+// Position the tooltip so its bottom-left corner is anchored to the top-left
+// of the anchor element.  The tooltip renders upward from that point.
 function _positionTooltipAbove(tt, anchorEl) {
   const rect = anchorEl.getBoundingClientRect();
-  const vw = window.innerWidth, vh = window.innerHeight;
   const ttRect = tt.getBoundingClientRect();
-  const ttW = ttRect.width  || 268;
-  const ttH = ttRect.height || 210;
-  let left = rect.left + (rect.width - ttW) / 2;
-  let top  = rect.top - ttH - TOOLTIP_MARGIN;
-  // Clamp horizontally within the viewport
-  if (left + ttW > vw - TOOLTIP_MARGIN) left = vw - ttW - TOOLTIP_MARGIN;
-  if (left < TOOLTIP_MARGIN) left = TOOLTIP_MARGIN;
-  // If no room above, show below instead
-  if (top < TOOLTIP_MARGIN) top = rect.bottom + TOOLTIP_MARGIN;
-  if (top + ttH > vh - TOOLTIP_MARGIN) top = vh - ttH - TOOLTIP_MARGIN;
-  if (top < TOOLTIP_MARGIN) top = TOOLTIP_MARGIN;
-  tt.style.left = `${left}px`;
-  tt.style.top  = `${top}px`;
+  const ttH = ttRect.height || TOOLTIP_DEFAULT_H;
+  tt.style.left = `${rect.left}px`;
+  tt.style.top  = `${rect.top - ttH - TOOLTIP_MARGIN}px`;
 }
 
 /**
