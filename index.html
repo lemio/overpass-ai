@@ -1205,7 +1205,8 @@ async function _attachWikiThumb(d, t) {
  * Asynchronously fetch a wiki image for tagStr ("key=value" or "key") and, if one
  * exists, attach mouseenter/mouseleave listeners on chip to show/hide the tooltip.
  * Safe to call for every chip — exits silently when no image is available.
- * The tooltip is positioned above the row header so it does not cover sibling chips.
+ * The tooltip is anchored above the nearest chips container so it does not
+ * obscure sibling chips and appears close to the hovered element.
  */
 async function _addChipWikiTooltip(chip, tagStr) {
   if (!tagStr || tagStr.includes('__unknown__')) return;
@@ -1214,13 +1215,13 @@ async function _addChipWikiTooltip(chip, tagStr) {
   const cache = _getImgCache();
   const entry = cache[tagStr] || {};
   const caption = (entry.fileTitle || '').replace(/^File:/, '').replace(/\.[^.]+$/, '');
-  // Resolve the row-header element once at setup time so the tooltip appears
-  // above the header and does not obscure sibling chips.
-  const csvRow = chip.closest('.csv-field-row');
-  const headerEl = csvRow?.querySelector('.csv-field-header')
-                || chip.closest('.svg-qstyle-row')?.querySelector('.svg-qstyle-header')
+  // CSV chips: anchor above the field header row so the tooltip clears the chip list.
+  // SVG chips: chips live in .svg-tag-chips at the bottom of the row — anchor there
+  //            rather than the distant .svg-qstyle-header at the top of the row.
+  const anchorEl = chip.closest('.csv-field-row')?.querySelector('.csv-field-header')
+                || chip.closest('.svg-tag-chips')
                 || chip;
-  chip.addEventListener('mouseenter', () => _showImgTooltip(thumbSrc, caption, tagStr, headerEl, 'above'));
+  chip.addEventListener('mouseenter', () => _showImgTooltip(thumbSrc, caption, tagStr, anchorEl, 'above'));
   chip.addEventListener('mouseleave', _hideImgTooltip);
 }
 
