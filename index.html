@@ -1150,18 +1150,22 @@ function _positionTooltip(tt, anchorEl) {
   if (left + ttW > vw - TOOLTIP_MARGIN)  left = rect.left - ttW - TOOLTIP_MARGIN;
   if (top  + ttH > vh - TOOLTIP_MARGIN)  top  = vh - ttH - TOOLTIP_MARGIN;
   if (top < TOOLTIP_MARGIN) top = TOOLTIP_MARGIN;
-  tt.style.left = `${left}px`;
-  tt.style.top  = `${top}px`;
+  tt.style.left      = `${left}px`;
+  tt.style.top       = `${top}px`;
+  // Reset any transform set by _positionTooltipAbove to avoid bleed-over
+  // when the same tooltip element is reused with a different placement.
+  tt.style.transform = '';
 }
 
 // Position the tooltip so its bottom-left corner is anchored to the top-left
 // of the anchor element.  The tooltip renders upward from that point.
+// Uses CSS transform so the anchor is stable regardless of the tooltip's height
+// (which is unknown at hover time because the image may not have loaded yet).
 function _positionTooltipAbove(tt, anchorEl) {
   const rect = anchorEl.getBoundingClientRect();
-  const ttRect = tt.getBoundingClientRect();
-  const ttH = ttRect.height || TOOLTIP_DEFAULT_H;
-  tt.style.left = `${rect.left}px`;
-  tt.style.top  = `${rect.top - ttH - TOOLTIP_MARGIN}px`;
+  tt.style.left      = `${rect.left}px`;
+  tt.style.top       = `${rect.top - TOOLTIP_MARGIN}px`;
+  tt.style.transform = 'translateY(-100%)';
 }
 
 /**
