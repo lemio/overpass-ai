@@ -575,6 +575,8 @@ const STYLE = {
   LINE_WEIGHT:      3,
   LINE_WEIGHT_SEL:  4,
   LINE_WEIGHT_HL:   4.5,
+  POLY_WEIGHT:      2,
+  POLY_FILL_OPACITY: 0.18,
 };
 
 const EXAMPLES = [
@@ -1402,7 +1404,7 @@ function renderOnMap(idx, elements) {
 
 function nodeStyle(c) { return { radius: STYLE.NODE_RADIUS, fillColor: c, color: '#fff', weight: STYLE.NODE_WEIGHT, fillOpacity: 0.85, opacity: 1 }; }
 function lineStyle(c) { return { color: c, weight: STYLE.LINE_WEIGHT, opacity: 0.8 }; }
-function polyStyle(c) { return { color: c, weight: 2, fillColor: c, fillOpacity: 0.18, opacity: 0.8 }; }
+function polyStyle(c) { return { color: c, weight: STYLE.POLY_WEIGHT, fillColor: c, fillOpacity: STYLE.POLY_FILL_OPACITY, opacity: 0.8 }; }
 
 /* ── Area dot fallback ──────────────────────────────────────────── */
 let _areaDotTimer = null;
@@ -1492,9 +1494,9 @@ function isMultipolygonRelation(el) {
 function assembleRings(wayGeometries) {
   const remaining = wayGeometries.slice();
   const rings = [];
-  const ptEq = (a, b) => a[0] === b[0] && a[1] === b[1];
+  const pointsEqual = (a, b) => a[0] === b[0] && a[1] === b[1];
   while (remaining.length > 0) {
-    let chain = remaining.splice(0, 1)[0].slice();
+    let chain = remaining.shift().slice();
     let progress = true;
     while (progress) {
       progress = false;
@@ -1504,19 +1506,12 @@ function assembleRings(wayGeometries) {
         const cStart = chain[0];
         const wStart = way[0];
         const wEnd   = way[way.length - 1];
-        if (ptEq(cEnd, wStart)) {
-          chain = chain.concat(way.slice(1));
-          remaining.splice(i, 1); progress = true; break;
-        } else if (ptEq(cEnd, wEnd)) {
-          chain = chain.concat(way.slice(0, -1).reverse());
-          remaining.splice(i, 1); progress = true; break;
-        } else if (ptEq(cStart, wEnd)) {
-          chain = way.slice(0, -1).concat(chain);
-          remaining.splice(i, 1); progress = true; break;
-        } else if (ptEq(cStart, wStart)) {
-          chain = way.slice(1).reverse().concat(chain);
-          remaining.splice(i, 1); progress = true; break;
-        }
+        let merged = null;
+        if      (pointsEqual(cEnd,   wStart)) merged = chain.concat(way.slice(1));
+        else if (pointsEqual(cEnd,   wEnd))   merged = chain.concat(way.slice(0, -1).reverse());
+        else if (pointsEqual(cStart, wEnd))   merged = way.slice(0, -1).concat(chain);
+        else if (pointsEqual(cStart, wStart)) merged = way.slice(1).reverse().concat(chain);
+        if (merged) { chain = merged; remaining.splice(i, 1); progress = true; break; }
       }
     }
     rings.push(chain);
@@ -1541,8 +1536,16 @@ function buildPopup(el, name, color) {
 
 function hlLayer(layer, type, on, color) {
   try {
-    if (type === 'node') layer.setStyle({ weight: on ? STYLE.NODE_WEIGHT_HL : STYLE.NODE_WEIGHT, radius: on ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
-    else layer.setStyle({ weight: on ? STYLE.LINE_WEIGHT_HL : STYLE.LINE_WEIGHT, opacity: on ? 1 : 0.8 });
+    if (type === 'node') {
+      layer.setStyle({ weight: on ? STYLE.NODE_WEIGHT_HL : STYLE.NODE_WEIGHT, radius: on ? STYLE.NODE_RADIUS_SEL : STYLE.NODE_RADIUS });
+    } else if (layer.options?.fill) {
+      // Polygon/area layer (way areas and relation multipolygons) — also highlight the fill
+      layer.setStyle(on
+        ? { weight: STYLE.LINE_WEIGHT_HL, fillOpacity: 0.38, opacity: 1 }
+        : { weight: STYLE.POLY_WEIGHT, fillOpacity: STYLE.POLY_FILL_OPACITY, opacity: 0.8 });
+    } else {
+      layer.setStyle({ weight: on ? STYLE.LINE_WEIGHT_HL : STYLE.LINE_WEIGHT, opacity: on ? 1 : 0.8 });
+    }
     if (on) { try { layer.bringToFront(); } catch(_) {} }
   } catch(_) {}
 }
