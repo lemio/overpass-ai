@@ -1353,8 +1353,8 @@ function renderOnMap(idx, elements) {
       const wayMembers = el.members.filter(m => m.type === 'way' && m.geometry);
       if (wayMembers.length) {
         if (isMultipolygonRelation(el)) {
-          const outerRings = wayMembers.filter(m => !m.role || m.role === 'outer').map(m => m.geometry.map(p => [p.lat, p.lon]));
-          const innerRings = wayMembers.filter(m => m.role === 'inner').map(m => m.geometry.map(p => [p.lat, p.lon]));
+          const outerRings = assembleRings(wayMembers.filter(m => !m.role || m.role === 'outer').map(m => m.geometry.map(p => [p.lat, p.lon])));
+          const innerRings = assembleRings(wayMembers.filter(m => m.role === 'inner').map(m => m.geometry.map(p => [p.lat, p.lon])));
           if (outerRings.length) {
             layer = L.polygon([...outerRings, ...innerRings], polyStyle(color));
             const bounds = layer.getBounds();
@@ -1485,6 +1485,43 @@ function isMultipolygonRelation(el) {
   if (tags.type === 'multipolygon') return true;
   if (isAreaEl(tags)) return true;
   return el.members.some(m => m.type === 'way' && (m.role === 'outer' || m.role === 'inner'));
+}
+
+// Assembles individual way segments (arrays of [lat,lon] points) into closed rings
+// by chaining connected ways. Ways sharing endpoints are merged into one ring.
+function assembleRings(wayGeometries) {
+  const remaining = wayGeometries.slice();
+  const rings = [];
+  const ptEq = (a, b) => a[0] === b[0] && a[1] === b[1];
+  while (remaining.length > 0) {
+    let chain = remaining.splice(0, 1)[0].slice();
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (let i = 0; i < remaining.length; i++) {
+        const way = remaining[i];
+        const cEnd   = chain[chain.length - 1];
+        const cStart = chain[0];
+        const wStart = way[0];
+        const wEnd   = way[way.length - 1];
+        if (ptEq(cEnd, wStart)) {
+          chain = chain.concat(way.slice(1));
+          remaining.splice(i, 1); progress = true; break;
+        } else if (ptEq(cEnd, wEnd)) {
+          chain = chain.concat(way.slice(0, -1).reverse());
+          remaining.splice(i, 1); progress = true; break;
+        } else if (ptEq(cStart, wEnd)) {
+          chain = way.slice(0, -1).concat(chain);
+          remaining.splice(i, 1); progress = true; break;
+        } else if (ptEq(cStart, wStart)) {
+          chain = way.slice(1).reverse().concat(chain);
+          remaining.splice(i, 1); progress = true; break;
+        }
+      }
+    }
+    rings.push(chain);
+  }
+  return rings;
 }
 
 function elId(el)   { return `${el.type}-${el.id}`; }
@@ -3382,10 +3419,12 @@ async function _generateSvgString(skipBackground = false) {
         if (isMultipolygonRelation(el)) {
           const outerMembers = wayMembers.filter(m => !m.role || m.role === 'outer');
           const innerMembers = wayMembers.filter(m => m.role === 'inner');
-          const allMembers   = [...outerMembers, ...innerMembers];
+          const outerRings = assembleRings(outerMembers.map(m => m.geometry.map(p => [p.lat, p.lon])));
+          const innerRings = assembleRings(innerMembers.map(m => m.geometry.map(p => [p.lat, p.lon])));
+          const allRings   = [...outerRings, ...innerRings];
           let pathD = '';
-          allMembers.forEach(m => {
-            const pts = m.geometry.map(p => geoToSvg(p.lat, p.lon));
+          allRings.forEach(ring => {
+            const pts = ring.map(([lat, lon]) => geoToSvg(lat, lon));
             if (!pts.length) return;
             pathD += 'M ' + pts.map(p => `${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(' L ') + ' Z ';
           });
