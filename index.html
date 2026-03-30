@@ -1030,7 +1030,7 @@ function _getImgCache() {
 }
 
 // Filename extensions considered real photos (skip icon/logo SVGs)
-const _PHOTO_EXT_RE = /\.(jpe?g|png|gif|webp)$/i;
+const _PHOTO_EXT_RE = /\.(jpe?g|png|gif|webp|avif)$/i;
 const _SKIP_NAME_RE = /\b(icon|logo|map|osm|maki|carto|symbol|pictogram|marker|shield)\b/i;
 
 /**
@@ -1166,6 +1166,22 @@ async function _attachWikiThumb(d, t) {
     e.stopPropagation();
     window.open(origUrl, '_blank', 'noopener,noreferrer');
   });
+}
+
+/**
+ * Asynchronously fetch a wiki image for tagStr ("key=value" or "key") and, if one
+ * exists, attach mouseenter/mouseleave listeners on chip to show/hide the tooltip.
+ * Safe to call for every chip — exits silently when no image is available.
+ */
+async function _addChipWikiTooltip(chip, tagStr) {
+  if (!tagStr || tagStr.includes('__unknown__')) return;
+  const thumbSrc = await fetchWikiTagImage(tagStr);
+  if (!thumbSrc) return;
+  const cache = _getImgCache();
+  const entry = cache[tagStr] || {};
+  const caption = (entry.fileTitle || '').replace(/^File:/, '').replace(/\.[^.]+$/, '');
+  chip.addEventListener('mouseenter', () => _showImgTooltip(thumbSrc, caption, tagStr, chip));
+  chip.addEventListener('mouseleave', _hideImgTooltip);
 }
 
 /* ── Overpass execution ─────────────────────────────────────────── */
@@ -1930,6 +1946,7 @@ function openCsvExport() {
     chip.addEventListener('mouseenter', () => highlightByTagValue(chip.dataset.key, chip.dataset.value));
     chip.addEventListener('mouseleave', clearTagHighlight);
     chip.addEventListener('click', () => selectByTagValue(chip.dataset.key, chip.dataset.value, chip));
+    _addChipWikiTooltip(chip, `${chip.dataset.key}=${chip.dataset.value}`);
   });
 
   openCsvView();
@@ -2987,6 +3004,7 @@ function _renderTagChips(row, key) {
       if (selR && selR.has(val)) chip.classList.add('chip-sel');
 
       chipsEl.appendChild(chip);
+      if (!isUnknown) _addChipWikiTooltip(chip, `${tagKey}=${val}`);
     });
   });
 }
