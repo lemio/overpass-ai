@@ -580,11 +580,9 @@ const STYLE = {
   POLY_FILL_OPACITY_HL: 0.38,
 };
 
-const EXAMPLES = [
-  'Streets where cars are allowed 50 km/h and are less than 1 km from an elementary school with pedestrian crossings',
-  'Streets with shared transport of bikes and cars where the maximum speed is 50 km/h or more',
-  'All chocolate stores in the Netherlands',
-  'Railway stations that do not have an OV-fiets within 1 km',
+const ZIP_EXAMPLES = [
+  { label: 'Amsterdam bike storage', url: 'examples/amsterdam-bike-storage.zip' },
+  { label: 'Eindhoven bus stops', url: 'examples/eindhoven-bus-stops.zip' },
 ];
 
 /* ── State ──────────────────────────────────────────────────────── */
@@ -650,12 +648,14 @@ function initMap() {
 
 function buildExamples() {
   const list = document.getElementById('exampleList');
-  EXAMPLES.forEach(ex => {
+  ZIP_EXAMPLES.forEach(ex => {
     const btn = document.createElement('button');
     btn.className = 'example-btn';
-    btn.textContent = ex;
+    btn.textContent = ex.label;
     btn.addEventListener('click', () => {
-      document.getElementById('questionInput').value = ex;
+      const fullUrl = new URL(ex.url, location.href).href;
+      history.replaceState(null, '', '#file=' + encodeURIComponent(fullUrl));
+      loadZipFromUrl(fullUrl);
     });
     list.appendChild(btn);
   });
@@ -3904,8 +3904,27 @@ function shareQuery() {
   }
 }
 
+async function loadZipFromUrl(url) {
+  if (!window.JSZip) { showError('JSZip library not loaded. Cannot import.'); return; }
+  setStatus('Fetching session…');
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    const blob = await response.blob();
+    await importSessionZip(blob);
+  } catch(e) {
+    setStatus('Load failed');
+    showError(`Could not load file: ${e.message}`);
+  }
+}
+
 function loadShare() {
   const hash = location.hash;
+  if (hash.startsWith('#file=')) {
+    const url = decodeURIComponent(hash.slice('#file='.length));
+    if (url) loadZipFromUrl(url);
+    return;
+  }
   if (!hash.startsWith('#share=')) return;
   try {
     const encoded = hash.slice('#share='.length);
